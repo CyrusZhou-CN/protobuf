@@ -11,7 +11,6 @@
 
 #include <cstddef>
 #include <memory>
-#include <string>
 #include <vector>
 
 #include "absl/log/absl_check.h"
@@ -26,6 +25,10 @@
 #include "google/protobuf/descriptor.pb.h"
 #include "google/protobuf/io/printer.h"
 #include "google/protobuf/wire_format.h"
+#include "google/protobuf/wire_format_lite.h"
+
+// Must be included last.
+#include "google/protobuf/port_def.inc"
 
 namespace google {
 namespace protobuf {
@@ -162,6 +165,17 @@ class SingularPrimitive final : public FieldGeneratorBase {
   void GenerateInlineAccessorDefinitions(io::Printer* p) const override;
   void GenerateSerializeWithCachedSizesToArray(io::Printer* p) const override;
   void GenerateByteSize(io::Printer* p) const override;
+#ifdef PROTOBUF_INTERNAL_V2_EXPERIMENT_PROTOC
+  void GenerateByteSizeV2(io::Printer* p) const override {
+    // |tag|1B| |field_number|4B| |payload...|
+    p->Emit({{"size", internal::v2::kSingularFieldTagSize +
+                          static_cast<size_t>(
+                              CppTypeToV2FieldSize(field_->cpp_type()))}},
+            R"cc(
+              total_size += $size$;
+            )cc");
+  }
+_PROTOC
 
  private:
   const Options* opts_;
@@ -402,6 +416,16 @@ class RepeatedPrimitive final : public FieldGeneratorBase {
   void GenerateInlineAccessorDefinitions(io::Printer* p) const override;
   void GenerateSerializeWithCachedSizesToArray(io::Printer* p) const override;
   void GenerateByteSize(io::Printer* p) const override;
+#ifdef PROTOBUF_INTERNAL_V2_EXPERIMENT_PROTOC
+  void GenerateByteSizeV2(io::Printer* p) const override {
+    // |tag|1B| |field_number|4B| |count|4B| |length|4B| |payload|...
+    p->Emit(
+        R"cc(
+          total_size += ::_pbi::WireFormatLite::RepeatedNumericByteSizeV2(
+              this_._internal_$name$());
+        )cc");
+  }
+_PROTOC
 
  private:
   bool HasCachedSize() const {
@@ -661,3 +685,5 @@ std::unique_ptr<FieldGeneratorBase> MakeRepeatedPrimitiveGenerator(
 }  // namespace compiler
 }  // namespace protobuf
 }  // namespace google
+
+#include "google/protobuf/port_undef.inc"

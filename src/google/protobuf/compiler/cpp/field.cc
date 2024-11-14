@@ -42,6 +42,19 @@ namespace cpp {
 using ::google::protobuf::internal::WireFormat;
 using Sub = ::google::protobuf::io::Printer::Sub;
 
+#ifdef PROTOBUF_INTERNAL_V2_EXPERIMENT_PROTOC
+static_assert(FieldGeneratorBase::kV2SingularFieldTagSize ==
+              internal::v2::kSingularFieldTagSize);
+static_assert(FieldGeneratorBase::kV2LengthSize == internal::v2::kLengthSize);
+static_assert(FieldGeneratorBase::kV2SingularLengthPrefixedFieldTagSize ==
+              internal::v2::kSingularLengthPrefixedFieldTagSize);
+static_assert(FieldGeneratorBase::kV2RepeatedFieldTagSize ==
+              internal::v2::kRepeatedFieldTagSize);
+static_assert(FieldGeneratorBase::kV2MapFieldTagSize ==
+              2 * internal::v2::kTagSize + internal::v2::kFieldNumberSize +
+                  internal::v2::kCountSize);
+_PROTOC
+
 std::vector<Sub> FieldVars(const FieldDescriptor* field, const Options& opts) {
   bool split = ShouldSplit(field, opts);
   std::vector<Sub> vars = {

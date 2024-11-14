@@ -25,6 +25,9 @@
 #include "google/protobuf/descriptor.pb.h"
 #include "google/protobuf/io/printer.h"
 
+// Must be included last.
+#include "google/protobuf/port_def.inc"
+
 namespace google {
 namespace protobuf {
 namespace compiler {
@@ -137,6 +140,17 @@ class SingularString : public FieldGeneratorBase {
                                       this_._internal_$name$());
     )cc");
   }
+
+#ifdef PROTOBUF_INTERNAL_V2_EXPERIMENT_PROTOC
+  void GenerateByteSizeV2(io::Printer* p) const override {
+    // |tag|1B| |field_number|4B| |length|4B| |payload...|
+    p->Emit(
+        R"cc(
+          total_size += ::_pbi::WireFormatLite::LengthPrefixedByteSizeV2(
+              this_._internal_$name$().size());
+        )cc");
+  }
+_PROTOC
 
   void GenerateCopyAggregateInitializer(io::Printer* p) const override {
     p->Emit(R"cc(
@@ -807,6 +821,17 @@ class RepeatedString : public FieldGeneratorBase {
     )cc");
   }
 
+#ifdef PROTOBUF_INTERNAL_V2_EXPERIMENT_PROTOC
+  void GenerateByteSizeV2(io::Printer* p) const override {
+    // |tag|1B| |field_number|4B| |count|4B| |length|4B| |payload|...
+    p->Emit(
+        R"cc(
+          total_size += ::_pbi::WireFormatLite::RepeatedStringByteSizeV2(
+              this_._internal_$name$());
+        )cc");
+  }
+_PROTOC
+
   void GenerateAccessorDeclarations(io::Printer* p) const override;
   void GenerateInlineAccessorDefinitions(io::Printer* p) const override;
   void GenerateSerializeWithCachedSizesToArray(io::Printer* p) const override;
@@ -986,3 +1011,5 @@ std::unique_ptr<FieldGeneratorBase> MakeRepeatedStringGenerator(
 }  // namespace compiler
 }  // namespace protobuf
 }  // namespace google
+
+#include "google/protobuf/port_undef.inc"

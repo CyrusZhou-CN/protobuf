@@ -25,6 +25,9 @@
 #include "google/protobuf/descriptor.pb.h"
 #include "google/protobuf/io/printer.h"
 
+// Must be included last.
+#include "google/protobuf/port_def.inc"
+
 namespace google {
 namespace protobuf {
 namespace compiler {
@@ -117,6 +120,16 @@ class SingularEnum : public FieldGeneratorBase {
                     ::_pbi::WireFormatLite::EnumSize(this_._internal_$name$());
     )cc");
   }
+
+#ifdef PROTOBUF_INTERNAL_V2_EXPERIMENT_PROTOC
+  void GenerateByteSizeV2(io::Printer* p) const override {
+    // |tag|1B| |field_number|4B| |payload...|
+    p->Emit({{"size", internal::v2::kSingularFieldTagSize + sizeof(int)}},
+            R"cc(
+              total_size += $size$;
+            )cc");
+  }
+_PROTOC
 
   void GenerateConstexprAggregateInitializer(io::Printer* p) const override {
     p->Emit(R"cc(
@@ -369,6 +382,16 @@ class RepeatedEnum : public FieldGeneratorBase {
   void GenerateInlineAccessorDefinitions(io::Printer* p) const override;
   void GenerateSerializeWithCachedSizesToArray(io::Printer* p) const override;
   void GenerateByteSize(io::Printer* p) const override;
+#ifdef PROTOBUF_INTERNAL_V2_EXPERIMENT_PROTOC
+  void GenerateByteSizeV2(io::Printer* p) const override {
+    // |tag|1B| |field_number|4B| |count|4B| |length|4B| |payload|...
+    p->Emit(
+        R"cc(
+          total_size += ::_pbi::WireFormatLite::RepeatedNumericByteSizeV2(
+              this_._internal_$name$());
+        )cc");
+  }
+_PROTOC
 
  private:
   const Options* opts_;
@@ -576,3 +599,5 @@ std::unique_ptr<FieldGeneratorBase> MakeRepeatedEnumGenerator(
 }  // namespace compiler
 }  // namespace protobuf
 }  // namespace google
+
+#include "google/protobuf/port_undef.inc"

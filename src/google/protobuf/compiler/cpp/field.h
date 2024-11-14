@@ -29,6 +29,9 @@
 #include "google/protobuf/descriptor.h"
 #include "google/protobuf/io/printer.h"
 
+// Must be included last.
+#include "google/protobuf/port_def.inc"
+
 namespace google {
 namespace protobuf {
 namespace compiler {
@@ -182,6 +185,9 @@ class FieldGeneratorBase {
       io::Printer* p) const = 0;
 
   virtual void GenerateByteSize(io::Printer* p) const = 0;
+#ifdef PROTOBUF_INTERNAL_V2_EXPERIMENT_PROTOC
+  virtual void GenerateByteSizeV2(io::Printer* p) const = 0;
+_PROTOC
 
   virtual void GenerateIsInitialized(io::Printer* p) const {
     ABSL_CHECK(!NeedsIsInitialized());
@@ -201,6 +207,17 @@ class FieldGeneratorBase {
   absl::flat_hash_map<absl::string_view, std::string> variables_;
 
   pb::CppFeatures::StringType GetDeclaredStringType() const;
+
+#ifdef PROTOBUF_INTERNAL_V2_EXPERIMENT_PROTOC
+  static constexpr int CppTypeToV2FieldSize(FieldDescriptor::CppType cpp_type) {
+    ABSL_CHECK_GT(cpp_type, 0);
+    ABSL_CHECK_LE(cpp_type, FieldDescriptor::CppType::MAX_CPPTYPE);
+
+    int field_size = internal::v2::kCppTypeToSize[cpp_type];
+    ABSL_CHECK_NE(field_size, -1);
+    return field_size;
+  }
+_PROTOC
 
  private:
   bool should_split_ = false;
@@ -477,6 +494,13 @@ class FieldGenerator {
     impl_->GenerateByteSize(p);
   }
 
+#ifdef PROTOBUF_INTERNAL_V2_EXPERIMENT_PROTOC
+  void GenerateByteSizeV2(io::Printer* p) const {
+    auto vars = PushVarsForCall(p);
+    impl_->GenerateByteSizeV2(p);
+  }
+_PROTOC
+
   // Generates lines to call IsInitialized() for eligible message fields. Non
   // message fields won't need to override this function.
   void GenerateIsInitialized(io::Printer* p) const {
@@ -540,5 +564,7 @@ std::vector<io::Printer::Sub> FieldVars(const FieldDescriptor* field,
 }  // namespace compiler
 }  // namespace protobuf
 }  // namespace google
+
+#include "google/protobuf/port_undef.inc"
 
 #endif  // GOOGLE_PROTOBUF_COMPILER_CPP_FIELD_H__

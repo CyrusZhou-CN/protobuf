@@ -26,6 +26,9 @@
 #include "google/protobuf/compiler/cpp/options.h"
 #include "google/protobuf/descriptor.h"
 
+// Must be included last.
+#include "google/protobuf/port_def.inc"
+
 namespace google {
 namespace protobuf {
 namespace compiler {
@@ -106,6 +109,15 @@ class CordFieldGenerator : public FieldGeneratorBase {
       $field$ = $pb$::Arena::Create<absl::Cord>(arena, *from.$field$);
     )cc");
   }
+#ifdef PROTOBUF_INTERNAL_V2_EXPERIMENT_PROTOC
+  void GenerateByteSizeV2(io::Printer* printer) const override {
+    // |tag|1B| |field_number|4B| |length|4B| |payload...|
+    printer->Emit(R"cc(
+      total_size += ::_pbi::WireFormatLite::LengthPrefixedByteSizeV2(
+          this_._internal_$name$().size());
+    )cc");
+  }
+_PROTOC
 };
 
 class CordOneofFieldGenerator : public CordFieldGenerator {
@@ -248,7 +260,6 @@ void CordFieldGenerator::GenerateConstructorCode(io::Printer* printer) const {
     format("$field$ = ::absl::string_view($default$, $default_length$);\n");
   }
 }
-
 
 void CordFieldGenerator::GenerateArenaDestructorCode(
     io::Printer* printer) const {
@@ -473,3 +484,5 @@ std::unique_ptr<FieldGeneratorBase> MakeOneofCordGenerator(
 }  // namespace compiler
 }  // namespace protobuf
 }  // namespace google
+
+#include "google/protobuf/port_undef.inc"
