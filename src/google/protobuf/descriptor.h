@@ -917,8 +917,8 @@ class PROTOBUF_EXPORT FieldDescriptor : private internal::SymbolBase,
 
   // This should never be called directly. Use is_required() and is_repeated()
   // helper methods instead.
-  ABSL_DEPRECATED("Use is_required() or is_repeated() instead.")
-  Label label() const;  // optional/required/repeated
+  // ABSL_DEPRECATED("Use is_required() or is_repeated() instead.")
+  // Label label() const;  // optional/required/repeated
 
 #ifndef SWIG
   CppStringType cpp_string_type() const;  // The C++ string type of this field.
