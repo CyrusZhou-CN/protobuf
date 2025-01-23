@@ -1524,6 +1524,7 @@ template <>
 inline const RepeatedPtrField<std::string>&
 Reflection::GetRepeatedPtrFieldInternal<std::string>(
     const Message& message, const FieldDescriptor* field) const {
+  ABSL_DCHECK_EQ(message.GetReflection(), this);
   return *static_cast<const RepeatedPtrField<std::string>*>(
       GetRawRepeatedString(message, field, true));
 }
@@ -1532,6 +1533,7 @@ template <>
 inline RepeatedPtrField<std::string>*
 Reflection::MutableRepeatedPtrFieldInternal<std::string>(
     Message* message, const FieldDescriptor* field) const {
+  ABSL_DCHECK_EQ(message->GetReflection(), this);
   return static_cast<RepeatedPtrField<std::string>*>(
       MutableRawRepeatedString(message, field, true));
 }
@@ -1542,6 +1544,7 @@ Reflection::MutableRepeatedPtrFieldInternal<std::string>(
 template <>
 inline const RepeatedPtrField<Message>& Reflection::GetRepeatedPtrFieldInternal(
     const Message& message, const FieldDescriptor* field) const {
+  ABSL_DCHECK_EQ(message.GetReflection(), this);
   return *static_cast<const RepeatedPtrField<Message>*>(GetRawRepeatedField(
       message, field, FieldDescriptor::CPPTYPE_MESSAGE, -1, nullptr));
 }
@@ -1549,6 +1552,7 @@ inline const RepeatedPtrField<Message>& Reflection::GetRepeatedPtrFieldInternal(
 template <>
 inline RepeatedPtrField<Message>* Reflection::MutableRepeatedPtrFieldInternal(
     Message* message, const FieldDescriptor* field) const {
+  ABSL_DCHECK_EQ(message->GetReflection(), this);
   return static_cast<RepeatedPtrField<Message>*>(MutableRawRepeatedField(
       message, field, FieldDescriptor::CPPTYPE_MESSAGE, -1, nullptr));
 }
@@ -1556,6 +1560,7 @@ inline RepeatedPtrField<Message>* Reflection::MutableRepeatedPtrFieldInternal(
 template <typename PB>
 inline const RepeatedPtrField<PB>& Reflection::GetRepeatedPtrFieldInternal(
     const Message& message, const FieldDescriptor* field) const {
+  ABSL_DCHECK_EQ(message.GetReflection(), this);
   return *static_cast<const RepeatedPtrField<PB>*>(
       GetRawRepeatedField(message, field, FieldDescriptor::CPPTYPE_MESSAGE, -1,
                           PB::default_instance().GetDescriptor()));
@@ -1564,6 +1569,7 @@ inline const RepeatedPtrField<PB>& Reflection::GetRepeatedPtrFieldInternal(
 template <typename PB>
 inline RepeatedPtrField<PB>* Reflection::MutableRepeatedPtrFieldInternal(
     Message* message, const FieldDescriptor* field) const {
+  ABSL_DCHECK_EQ(message->GetReflection(), this);
   return static_cast<RepeatedPtrField<PB>*>(
       MutableRawRepeatedField(message, field, FieldDescriptor::CPPTYPE_MESSAGE,
                               -1, PB::default_instance().GetDescriptor()));
@@ -1576,6 +1582,7 @@ const Type& Reflection::DefaultRaw(const FieldDescriptor* field) const {
 
 bool Reflection::HasOneofField(const Message& message,
                                const FieldDescriptor* field) const {
+  ABSL_DCHECK_EQ(message.GetReflection(), this);
   return (GetOneofCase(message, field->containing_oneof()) ==
           static_cast<uint32_t>(field->number()));
 }
@@ -1665,12 +1672,14 @@ const Type& Reflection::GetRaw(const Message& message,
 template <typename T>
 RepeatedFieldRef<T> Reflection::GetRepeatedFieldRef(
     const Message& message, const FieldDescriptor* field) const {
+  ABSL_DCHECK_EQ(message.GetReflection(), this);
   return RepeatedFieldRef<T>(message, field);
 }
 
 template <typename T>
 MutableRepeatedFieldRef<T> Reflection::GetMutableRepeatedFieldRef(
     Message* message, const FieldDescriptor* field) const {
+  ABSL_DCHECK_EQ(message->GetReflection(), this);
   return MutableRepeatedFieldRef<T>(message, field);
 }
 

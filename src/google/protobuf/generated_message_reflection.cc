@@ -347,17 +347,20 @@ Reflection::~Reflection() {
 
 const UnknownFieldSet& Reflection::GetUnknownFields(
     const Message& message) const {
+  ABSL_DCHECK_EQ(message.GetReflection(), this);
   return GetInternalMetadata(message).unknown_fields<UnknownFieldSet>(
       UnknownFieldSet::default_instance);
 }
 
 UnknownFieldSet* Reflection::MutableUnknownFields(Message* message) const {
+  ABSL_DCHECK_EQ(message->GetReflection(), this);
   return MutableInternalMetadata(message)
       ->mutable_unknown_fields<UnknownFieldSet>();
 }
 
 bool Reflection::IsLazyExtension(const Message& message,
                                  const FieldDescriptor* field) const {
+  USAGE_CHECK_MESSAGE(IsLazyExtension, &message);
   return field->is_extension() &&
          GetExtensionSet(message).HasLazy(field->number());
 }
@@ -383,6 +386,7 @@ internal::field_layout::TransformValidation Reflection::GetLazyStyle(
 }
 
 size_t Reflection::SpaceUsedLong(const Message& message) const {
+  ABSL_DCHECK_EQ(message.GetReflection(), this);
   // object_size_ already includes the in-memory representation of each field
   // in the message, so we only need to account for additional memory used by
   // the fields.
