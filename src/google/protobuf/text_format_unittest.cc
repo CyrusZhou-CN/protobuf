@@ -76,7 +76,6 @@ class UnsetFieldsMetadataTextFormatTestUtil {
 // Can't use an anonymous namespace here due to brokenness of Tru64 compiler.
 namespace text_format_unittest {
 
-using ::google::protobuf::internal::kDebugStringSilentMarker;
 using ::google::protobuf::internal::UnsetFieldsMetadataTextFormatTestUtil;
 using ::testing::AllOf;
 using ::testing::HasSubstr;
@@ -93,6 +92,8 @@ constexpr absl::string_view kEscapeTestStringEscaped =
     "and \\t tabs and \\001 slashes \\\\ and  multiple   spaces\"";
 
 constexpr absl::string_view value_replacement = "\\[REDACTED\\]";
+
+constexpr absl::string_view kTextMarkerRegex = "goo\\.gle/[-\\w]+ *";
 
 class TextFormatTestBase : public testing::Test {
  public:
@@ -210,6 +211,7 @@ TEST_F(TextFormatTest, ShortFormat) {
   std::string value_replacement = "\\[REDACTED\\]";
   EXPECT_THAT(google::protobuf::ShortFormat(proto),
               testing::MatchesRegex(absl::Substitute(
+                  "$1"
                   "optional_redacted_string: $0 "
                   "optional_unredacted_string: \"bar\" "
                   "repeated_redacted_string: $0 "
@@ -226,7 +228,7 @@ TEST_F(TextFormatTest, ShortFormat) {
                   "\\{ optional_unredacted_nested_string: \"8\" \\} "
                   "map_redacted_string: $0 "
                   "map_unredacted_string \\{ key: \"ghi\" value: \"jkl\" \\}",
-                  value_replacement)));
+                  value_replacement, kTextMarkerRegex)));
 }
 
 TEST_F(TextFormatTest, Utf8Format) {
@@ -262,6 +264,7 @@ TEST_F(TextFormatTest, Utf8Format) {
 
   EXPECT_THAT(google::protobuf::Utf8Format(proto),
               testing::MatchesRegex(absl::Substitute(
+                  "$1\n"
                   "optional_redacted_string: $0\n"
                   "optional_unredacted_string: \"bar\"\n"
                   "repeated_redacted_string: $0\n"
@@ -280,7 +283,7 @@ TEST_F(TextFormatTest, Utf8Format) {
                   "map_redacted_string: $0\n"
                   "map_unredacted_string \\{\n  "
                   "key: \"ghi\"\n  value: \"jkl\"\n\\}\n",
-                  value_replacement)));
+                  value_replacement, kTextMarkerRegex)));
 }
 
 TEST_F(TextFormatTest, ShortPrimitiveRepeateds) {
@@ -433,6 +436,7 @@ TEST_F(TextFormatTest, PrintUnknownFields) {
             message_text);
 
   EXPECT_THAT(absl::StrCat(message), testing::MatchesRegex(absl::Substitute(
+                                         "$1\n"
                                          "5: UNKNOWN_VARINT $0\n"
                                          "5: UNKNOWN_FIXED32 $0\n"
                                          "5: UNKNOWN_FIXED64 $0\n"
@@ -441,7 +445,7 @@ TEST_F(TextFormatTest, PrintUnknownFields) {
                                          "8: UNKNOWN_VARINT $0\n"
                                          "8: UNKNOWN_VARINT $0\n"
                                          "8: UNKNOWN_VARINT $0\n",
-                                         value_replacement)));
+                                         value_replacement, kTextMarkerRegex)));
 }
 
 TEST_F(TextFormatTest, PrintUnknownFieldsDeepestStackWorks) {
@@ -2679,6 +2683,13 @@ TEST(TextFormatUnknownFieldTest, TestUnknownExtension) {
   EXPECT_FALSE(parser.ParseFromString("unknown_field: 1", &proto));
 }
 
+TEST(AbslStringifyTest, DebugStringIsTheSame) {
+  unittest::TestAllTypes proto;
+  proto.set_optional_int32(1);
+  proto.set_optional_string("foo");
+
+  EXPECT_THAT(proto.DebugString(), absl::StrCat(proto));
+}
 
 TEST(AbslStringifyTest, TextFormatIsUnchanged) {
   unittest::TestAllTypes proto;
@@ -2698,9 +2709,11 @@ TEST(AbslStringifyTest, StringifyHasRedactionMarker) {
   proto.set_optional_int32(1);
   proto.set_optional_string("foo");
 
-  EXPECT_THAT(absl::StrCat(proto), testing::MatchesRegex(
+  EXPECT_THAT(absl::StrCat(proto), testing::MatchesRegex(absl::Substitute(
+                                       "$0\n"
                                        "optional_int32: 1\n"
-                                       "optional_string: \"foo\"\n"));
+                                       "optional_string: \"foo\"\n",
+                                       kTextMarkerRegex)));
 }
 
 
@@ -2708,16 +2721,18 @@ TEST(AbslStringifyTest, StringifyMetaAnnotatedIsRedacted) {
   unittest::TestRedactedMessage proto;
   proto.set_meta_annotated("foo");
   EXPECT_THAT(absl::StrCat(proto), testing::MatchesRegex(absl::Substitute(
-                                       "meta_annotated: $0\n",
-                                       value_replacement)));
+                                       "$0\n"
+                                       "meta_annotated: $1\n",
+                                       kTextMarkerRegex, value_replacement)));
 }
 
 TEST(AbslStringifyTest, StringifyRepeatedMetaAnnotatedIsRedacted) {
   unittest::TestRedactedMessage proto;
   proto.set_repeated_meta_annotated("foo");
   EXPECT_THAT(absl::StrCat(proto), testing::MatchesRegex(absl::Substitute(
-                                       "repeated_meta_annotated: $0\n",
-                                       value_replacement)));
+                                       "$0\n"
+                                       "repeated_meta_annotated: $1\n",
+                                       kTextMarkerRegex, value_replacement)));
 }
 
 TEST(AbslStringifyTest, StringifyRepeatedMetaAnnotatedIsNotRedacted) {
@@ -2725,7 +2740,9 @@ TEST(AbslStringifyTest, StringifyRepeatedMetaAnnotatedIsNotRedacted) {
   proto.set_unredacted_repeated_annotations("foo");
   EXPECT_THAT(absl::StrCat(proto),
               testing::MatchesRegex(
-                  "unredacted_repeated_annotations: \"foo\"\n"));
+                  absl::Substitute("$0\n"
+                                   "unredacted_repeated_annotations: \"foo\"\n",
+                                   kTextMarkerRegex)));
 }
 
 TEST(AbslStringifyTest, TextFormatMetaAnnotatedIsNotRedacted) {
@@ -2739,23 +2756,26 @@ TEST(AbslStringifyTest, StringifyDirectMessageEnumIsRedacted) {
   unittest::TestRedactedMessage proto;
   proto.set_test_direct_message_enum("foo");
   EXPECT_THAT(absl::StrCat(proto), testing::MatchesRegex(absl::Substitute(
-                                       "test_direct_message_enum: $0\n",
-                                       value_replacement)));
+                                       "$0\n"
+                                       "test_direct_message_enum: $1\n",
+                                       kTextMarkerRegex, value_replacement)));
 }
 TEST(AbslStringifyTest, StringifyNestedMessageEnumIsRedacted) {
   unittest::TestRedactedMessage proto;
   proto.set_test_nested_message_enum("foo");
   EXPECT_THAT(absl::StrCat(proto), testing::MatchesRegex(absl::Substitute(
-                                       "test_nested_message_enum: $0\n",
-                                       value_replacement)));
+                                       "$0\n"
+                                       "test_nested_message_enum: $1\n",
+                                       kTextMarkerRegex, value_replacement)));
 }
 
 TEST(AbslStringifyTest, StringifyRedactedOptionDoesNotRedact) {
   unittest::TestRedactedMessage proto;
   proto.set_test_redacted_message_enum("foo");
-  EXPECT_THAT(absl::StrCat(proto),
-              testing::MatchesRegex(
-                  "test_redacted_message_enum: \"foo\"\n"));
+  EXPECT_THAT(absl::StrCat(proto), testing::MatchesRegex(absl::Substitute(
+                                       "$0\n"
+                                       "test_redacted_message_enum: \"foo\"\n",
+                                       kTextMarkerRegex)));
 }
 
 
