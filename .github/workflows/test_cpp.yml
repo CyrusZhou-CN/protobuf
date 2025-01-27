@@ -57,6 +57,7 @@ jobs:
             cache_key: aarch64-bazel7
             targets: "//src/... //src/google/protobuf/compiler:protoc_aarch64_test //third_party/utf8_range/..."
             image: "us-docker.pkg.dev/protobuf-build/containers/test/linux/emulation:7.1.2-aarch64-2920199ab0090ed427413a8e422e62695c8392a8"
+            continuous-only: true
     name: ${{ matrix.config.continuous-only && inputs.continuous-prefix || '' }} Linux ${{ matrix.config.name }}
     runs-on: ${{ matrix.config.runner || 'ubuntu-latest' }}
     steps:
@@ -99,7 +100,7 @@ jobs:
     strategy:
       fail-fast: false   # Don't cancel all jobs if one fails.
       matrix:
-        arch: [x86_64, aarch64]
+        arch: [x86_64]
     name: Linux Release ${{ matrix.arch }}
     runs-on: ubuntu-20-4core
     steps:
