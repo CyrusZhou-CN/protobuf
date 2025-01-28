@@ -2123,7 +2123,8 @@ DescriptorPool::DescriptorPool()
       enforce_weak_(false),
       enforce_extension_declarations_(ExtDeclEnforcementLevel::kNoEnforcement),
       disallow_enforce_utf8_(false),
-      deprecated_legacy_json_field_conflicts_(false) {}
+      deprecated_legacy_json_field_conflicts_(false),
+      enforce_naming_style_(false) {}
 
 DescriptorPool::DescriptorPool(DescriptorDatabase* fallback_database,
                                ErrorCollector* error_collector)
@@ -2138,7 +2139,8 @@ DescriptorPool::DescriptorPool(DescriptorDatabase* fallback_database,
       enforce_weak_(false),
       enforce_extension_declarations_(ExtDeclEnforcementLevel::kNoEnforcement),
       disallow_enforce_utf8_(false),
-      deprecated_legacy_json_field_conflicts_(false) {}
+      deprecated_legacy_json_field_conflicts_(false),
+      enforce_naming_style_(false) {}
 
 DescriptorPool::DescriptorPool(const DescriptorPool* underlay)
     : mutex_(nullptr),
@@ -2152,7 +2154,8 @@ DescriptorPool::DescriptorPool(const DescriptorPool* underlay)
       enforce_weak_(false),
       enforce_extension_declarations_(ExtDeclEnforcementLevel::kNoEnforcement),
       disallow_enforce_utf8_(false),
-      deprecated_legacy_json_field_conflicts_(false) {}
+      deprecated_legacy_json_field_conflicts_(false),
+      enforce_naming_style_(false) {}
 
 DescriptorPool::~DescriptorPool() {
   if (mutex_ != nullptr) delete mutex_;
@@ -4729,6 +4732,28 @@ class DescriptorBuilder {
 
   void ValidateJSType(const FieldDescriptor* field,
                       const FieldDescriptorProto& proto);
+
+  void ValidateNamingStyle(const FileDescriptor* file,
+                           const FileDescriptorProto& proto);
+  void ValidateNamingStyle(const Descriptor* message,
+                           const DescriptorProto& proto);
+  void ValidateNamingStyle(const OneofDescriptor* oneof,
+                           const OneofDescriptorProto& proto);
+  void ValidateNamingStyle(const FieldDescriptor* field,
+                           const FieldDescriptorProto& proto);
+  void ValidateNamingStyle(const EnumDescriptor* enum_descriptor,
+                           const EnumDescriptorProto& proto);
+  void ValidateNamingStyle(const EnumValueDescriptor* enum_value,
+                           const EnumValueDescriptorProto& proto);
+  void ValidateNamingStyle(const ServiceDescriptor* service,
+                           const ServiceDescriptorProto& proto);
+  void ValidateNamingStyle(const MethodDescriptor* method,
+                           const MethodDescriptorProto& proto);
+
+  // Nothing to validate for extension ranges. This overload only exists
+  // so that VisitDescriptors can be exhaustive.
+  void ValidateNamingStyle(const Descriptor::ExtensionRange* ext_range,
+                           const DescriptorProto::ExtensionRange& proto) {}
 };
 
 const FileDescriptor* DescriptorPool::BuildFile(
@@ -6270,6 +6295,16 @@ FileDescriptor* DescriptorBuilder::BuildFileImpl(
             deferred_validation_.ValidateFeatureLifetimes(
                 GetFile(descriptor), {descriptor.proto_features_, &desc_proto,
                                       GetFullName(descriptor), proto.name()});
+          }
+        });
+  }
+
+  if (!had_errors_ && pool_->enforce_naming_style_) {
+    internal::VisitDescriptors(
+        *result, proto, [&](const auto& descriptor, const auto& desc_proto) {
+          if (internal::InternalFeatureHelper::GetFeatures(descriptor)
+                  .enforce_naming_style() == FeatureSet::STYLE2024) {
+            ValidateNamingStyle(&descriptor, desc_proto);
           }
         });
   }
@@ -8613,6 +8648,210 @@ void DescriptorBuilder::ValidateJSType(const FieldDescriptor* field,
                "jstype is only allowed on int64, uint64, sint64, fixed64 "
                "or sfixed64 fields.");
       break;
+  }
+}
+
+namespace {
+
+// Whether the name contains underscores that violate the naming style guide (
+// a leading or trailing underscore, or an underscore which is not followed by
+// a letter)
+bool ContainsBadUnderscores(absl::string_view name) {
+  if (name.empty()) {
+    return false;
+  }
+  if (name[0] == '_' || name[name.size() - 1] == '_') {
+    return true;
+  }
+  for (size_t i = 1; i < name.size(); ++i) {
+    char prev = name[i - 1];
+    char curr = name[i];
+    if (prev == '_' &&
+        !((curr >= 'a' && curr <= 'z') || (curr >= 'A' && curr <= 'Z'))) {
+      return true;
+    }
+  }
+  return false;
+}
+
+bool is_lower_letter(char c) { return (c >= 'a' && c <= 'z'); }
+
+bool is_upper_letter(char c) { return (c >= 'A' && c <= 'Z'); }
+
+bool is_number(char c) { return (c >= '0' && c <= '9'); }
+
+bool IsValidTitleCaseName(absl::string_view name) {
+  if (name.empty()) {
+    return true;
+  }
+  if (!is_upper_letter(name[0])) {
+    return false;
+  }
+  for (size_t i = 1; i < name.size(); ++i) {
+    char c = name[i];
+    if (!is_upper_letter(c) && !is_lower_letter(c) && !is_number(c)) {
+      return false;
+    }
+  }
+  return true;
+}
+
+bool IsValidLowerSnakeCaseName(absl::string_view name) {
+  if (name.empty()) {
+    return true;
+  }
+  if (!is_lower_letter(name[0])) {
+    return false;
+  }
+  for (size_t i = 1; i < name.size(); ++i) {
+    char c = name[i];
+    if (!is_lower_letter(c) && !is_number(c) && c != '_') {
+      return false;
+    }
+  }
+  return true;
+}
+
+bool IsValidUpperSnakeCaseName(absl::string_view name) {
+  if (name.empty()) {
+    return true;
+  }
+  if (!is_upper_letter(name[0])) {
+    return false;
+  }
+  for (size_t i = 1; i < name.size(); ++i) {
+    char c = name[i];
+    // Note: this check also allows periods to check package names. Any other
+    // identifier would already have rejected periods before reaching this.
+    if (!is_upper_letter(c) && !is_number(c) && c != '_' && c != '.') {
+      return false;
+    }
+  }
+  return true;
+}
+
+const char kNamingStyleOptOutMessage[] =
+    " (feature.enforce_naming_style = STYLE_LEGACY can be used to opt out of "
+    "this check)";
+
+}  // namespace
+
+void DescriptorBuilder::ValidateNamingStyle(const FileDescriptor* file,
+                                            const FileDescriptorProto& proto) {
+  for (const auto& package_segment : absl::StrSplit(file->package(), ',')) {
+    if (!IsValidLowerSnakeCaseName(package_segment)) {
+      AddError(file->name(), proto, DescriptorPool::ErrorCollector::NAME, [&] {
+        return absl::StrCat("Package name ", file->package(),
+                            " should be dot.delimited.lower_snake_case",
+                            kNamingStyleOptOutMessage);
+      });
+    }
+  }
+  if (ContainsBadUnderscores(file->package())) {
+    AddError(file->name(), proto, DescriptorPool::ErrorCollector::NAME, [&] {
+      return absl::StrCat("Package name ", file->package(),
+                          " contains style violating underscores",
+                          kNamingStyleOptOutMessage);
+    });
+  }
+}
+
+void DescriptorBuilder::ValidateNamingStyle(const Descriptor* message,
+                                            const DescriptorProto& proto) {
+  if (!IsValidTitleCaseName(message->name())) {
+    AddError(message->name(), proto, DescriptorPool::ErrorCollector::NAME, [&] {
+      return absl::StrCat("Message name ", message->name(),
+                          " should be TitleCase", kNamingStyleOptOutMessage);
+    });
+  }
+}
+
+void DescriptorBuilder::ValidateNamingStyle(const OneofDescriptor* oneof,
+                                            const OneofDescriptorProto& proto) {
+  if (!IsValidLowerSnakeCaseName(oneof->name())) {
+    AddError(oneof->name(), proto, DescriptorPool::ErrorCollector::NAME, [&] {
+      return absl::StrCat("Oneof name ", oneof->name(),
+                          " should be lower_snake_case",
+                          kNamingStyleOptOutMessage);
+    });
+  }
+  if (ContainsBadUnderscores(oneof->name())) {
+    AddError(oneof->name(), proto, DescriptorPool::ErrorCollector::NAME, [&] {
+      return absl::StrCat("Oneof name ", oneof->name(),
+                          " contains style violating underscores",
+                          kNamingStyleOptOutMessage);
+    });
+  }
+}
+
+void DescriptorBuilder::ValidateNamingStyle(const FieldDescriptor* field,
+                                            const FieldDescriptorProto& proto) {
+  if (!IsValidLowerSnakeCaseName(field->name())) {
+    AddError(field->name(), proto, DescriptorPool::ErrorCollector::NAME, [&] {
+      return absl::StrCat("Field name ", field->name(),
+                          " should be lower_snake_case",
+                          kNamingStyleOptOutMessage);
+    });
+  }
+  if (ContainsBadUnderscores(field->name())) {
+    AddError(field->name(), proto, DescriptorPool::ErrorCollector::NAME, [&] {
+      return absl::StrCat("Field name ", field->name(),
+                          " contains style violating underscores",
+                          kNamingStyleOptOutMessage);
+    });
+  }
+}
+
+void DescriptorBuilder::ValidateNamingStyle(
+    const EnumDescriptor* enum_descriptor, const EnumDescriptorProto& proto) {
+  if (!IsValidTitleCaseName(enum_descriptor->name())) {
+    AddError(enum_descriptor->name(), proto,
+             DescriptorPool::ErrorCollector::NAME, [&] {
+               return absl::StrCat("Enum name ", enum_descriptor->name(),
+                                   " should be TitleCase",
+                                   kNamingStyleOptOutMessage);
+             });
+  }
+}
+
+void DescriptorBuilder::ValidateNamingStyle(
+    const EnumValueDescriptor* enum_value,
+    const EnumValueDescriptorProto& proto) {
+  if (!IsValidUpperSnakeCaseName(enum_value->name())) {
+    AddError(enum_value->name(), proto, DescriptorPool::ErrorCollector::NAME,
+             [&] {
+               return absl::StrCat("Enum value name ", enum_value->name(),
+                                   " should be UPPER_SNAKE_CASE",
+                                   kNamingStyleOptOutMessage);
+             });
+  }
+  if (ContainsBadUnderscores(enum_value->name())) {
+    AddError(enum_value->name(), proto, DescriptorPool::ErrorCollector::NAME,
+             [&] {
+               return absl::StrCat("Enum value name ", enum_value->name(),
+                                   " contains style violating underscores",
+                                   kNamingStyleOptOutMessage);
+             });
+  }
+}
+
+void DescriptorBuilder::ValidateNamingStyle(
+    const ServiceDescriptor* service, const ServiceDescriptorProto& proto) {
+  if (!IsValidTitleCaseName(service->name())) {
+    AddError(service->name(), proto, DescriptorPool::ErrorCollector::NAME, [&] {
+      return absl::StrCat("Service name ", service->name(),
+                          " should be TitleCase", kNamingStyleOptOutMessage);
+    });
+  }
+}
+
+void DescriptorBuilder::ValidateNamingStyle(
+    const MethodDescriptor* method, const MethodDescriptorProto& proto) {
+  if (!IsValidTitleCaseName(method->name())) {
+    AddError(method->name(), proto, DescriptorPool::ErrorCollector::NAME, [&] {
+      return absl::StrCat("Method name ", method->name(),
+                          " should be TitleCase", kNamingStyleOptOutMessage);
+    });
   }
 }
 

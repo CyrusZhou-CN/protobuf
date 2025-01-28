@@ -2387,6 +2387,15 @@ class PROTOBUF_EXPORT DescriptorPool {
     deprecated_legacy_json_field_conflicts_ = true;
   }
 
+  // Enforce the naming style rules. This applies the intended style rules
+  // corresponding to the edition of the file, and was first introduced
+  // with Edition 2024. Proto2, Proto3 and Edition 2023 are never considered
+  // to be in violation and so are unaffected by this.
+  //
+  // In Edition 2024, the 'enforce_naming_style` feature can be used to treat
+  // any naming style as not a violation.
+  void DisallowNamingStyleViolations() { enforce_naming_style_ = true; }
+
 
   // For internal use only:  Gets a non-const pointer to the generated pool.
   // This is called at static-initialization time only, so thread-safety is
@@ -2574,6 +2583,7 @@ class PROTOBUF_EXPORT DescriptorPool {
   ExtDeclEnforcementLevel enforce_extension_declarations_;
   bool disallow_enforce_utf8_;
   bool deprecated_legacy_json_field_conflicts_;
+  bool enforce_naming_style_;
   mutable bool build_started_ = false;
 
   // Set of files to track for additional validation. The bool value when true
