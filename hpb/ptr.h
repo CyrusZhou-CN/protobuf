@@ -61,8 +61,6 @@ class Ptr final {
 #endif
 
  private:
-  Ptr(upb_Message* msg, upb_Arena* arena) : p_(msg, arena) {}  // NOLINT
-
   friend class Ptr<const T>;
   friend typename T::Access;
 
