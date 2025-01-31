@@ -878,6 +878,7 @@ filegroup(
         "unittest_proto3_extensions.proto",
         "unittest_proto3_lite.proto",
         "unittest_proto3_optional.proto",
+        "unittest_redaction.proto",
         "unittest_retention.proto",
         "unittest_string_type.proto",
         "unittest_well_known_types.proto",
@@ -961,6 +962,7 @@ proto_library(
         "unittest_proto3_bad_macros.proto",
         "unittest_proto3_extensions.proto",
         "unittest_proto3_lite.proto",
+        "unittest_redaction.proto",
         "unittest_retention.proto",
         "unittest_string_type.proto",
         "unittest_string_view.proto",
@@ -1461,6 +1463,22 @@ cc_library(
         "@com_google_absl//absl/log:absl_check",
         "@com_google_absl//absl/memory",
         "@com_google_googletest//:gtest",
+    ],
+)
+
+cc_test(
+    name = "extension_declaration_test",
+    srcs = ["extension_declaration_test.cc"],
+    data = [
+        "testdata/extdecl/dup_number/extdecl_field_options.txtpb",
+        "testdata/extdecl/extdecl_field_options.txtpb",
+        "testdata/extdecl/invalid/extdecl_field_options.txtpb",
+    ],
+    deps = [
+        ":protobuf",
+        "@com_google_absl//absl/flags:flag",
+        "@com_google_absl//absl/strings",
+        "@com_google_googletest//:gtest_main",
     ],
 )
 
