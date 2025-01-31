@@ -3,6 +3,52 @@ use protobuf::prelude::*;
 use unittest_rust_proto::{NestedTestAllTypes, TestAllTypes};
 
 #[gtest]
+fn copy_from() {
+    let mut dst = TestAllTypes::new();
+    let mut src = TestAllTypes::new();
+    dst.copy_from(src.as_view());
+    assert_that!(dst.has_optional_int32(), eq(false));
+
+    src.set_optional_int32(42);
+    assert_that!(src.has_optional_int32(), eq(true));
+    assert_that!(dst.has_optional_int32(), eq(false)); // Not aliased.
+
+    dst.copy_from(src);
+    assert_that!(dst.as_view().has_optional_int32(), eq(true));
+}
+
+#[gtest]
+fn take_from() {
+    let mut dst = TestAllTypes::new();
+    let mut src = TestAllTypes::new();
+    src.set_optional_int32(42);
+    assert_that!(src.has_optional_int32(), eq(true));
+    assert_that!(dst.has_optional_int32(), eq(false)); // Not aliased.
+
+    dst.take_from(src.as_mut());
+    assert_that!(src.has_optional_int32(), eq(false)); // Take_from clears the original message.
+    assert_that!(dst.as_view().has_optional_int32(), eq(true));
+
+    dst.take_from(src); // Consuming take_from of an empty thing.
+    assert_that!(dst.as_view().has_optional_int32(), eq(false));
+}
+
+#[gtest]
+fn take_from_submsg() {
+    let mut dst = NestedTestAllTypes::new();
+    let mut src = NestedTestAllTypes::new();
+    src.child_mut().child_mut().payload_mut().set_optional_int32(42);
+
+    dst.child_mut().take_from(src.child_mut());
+
+    // The src's submessage is empty but its presence on parent is not affected.
+    assert_that!(src.has_child(), eq(true));
+    assert_that!(src.child().has_child(), eq(false));
+
+    assert_that!(dst.child().child().payload().optional_int32(), eq(42));
+}
+
+#[gtest]
 fn merge_from_empty() {
     let mut dst = TestAllTypes::new();
     let src = TestAllTypes::new();

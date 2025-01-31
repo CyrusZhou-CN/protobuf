@@ -19,7 +19,7 @@ extern "C" {
     /// # Safety
     /// - `mini_table` and `arena` must be valid to deref
     pub fn upb_Message_New(mini_table: *const upb_MiniTable, arena: RawArena)
-    -> Option<RawMessage>;
+        -> Option<RawMessage>;
 
     /// # Safety
     /// - `m` and `mini_table` must be valid to deref
@@ -40,7 +40,7 @@ extern "C" {
         src: RawMessage,
         mini_table: *const upb_MiniTable,
         arena: RawArena,
-    );
+    ) -> bool;
 
     /// # Safety
     /// - All three arguments must be valid to deref

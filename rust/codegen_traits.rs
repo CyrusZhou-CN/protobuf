@@ -13,7 +13,7 @@ use create::Parse;
 use interop::{MessageMutInterop, MessageViewInterop, OwnedMessageInterop};
 use read::Serialize;
 use std::fmt::Debug;
-use write::{Clear, ClearAndParse, MergeFrom};
+use write::{Clear, ClearAndParse, CopyFrom, MergeFrom, TakeFrom};
 
 /// A trait that all generated owned message types implement.
 pub trait Message: SealedInternal
@@ -23,7 +23,7 @@ pub trait Message: SealedInternal
   // Read traits:
   + Debug + Serialize
   // Write traits:
-  + Clear + ClearAndParse + MergeFrom
+  + Clear + ClearAndParse + TakeFrom + CopyFrom + MergeFrom
   // Thread safety:
   + Send + Sync
   // Copy/Clone:
@@ -56,7 +56,7 @@ pub trait MessageMut<'msg>: SealedInternal
     + Debug + Serialize
     // Write traits:
     // TODO: MsgMut should impl ClearAndParse.
-    + Clear + MergeFrom
+    + Clear + TakeFrom + CopyFrom + MergeFrom
     // Thread safety:
     + Sync
     // Copy/Clone:
@@ -93,7 +93,7 @@ pub(crate) mod read {
 /// traits.
 pub(crate) mod write {
     use super::SealedInternal;
-    use crate::AsView;
+    use crate::{AsMut, AsView};
 
     pub trait Clear: SealedInternal {
         fn clear(&mut self);
@@ -101,6 +101,18 @@ pub(crate) mod write {
 
     pub trait ClearAndParse: SealedInternal {
         fn clear_and_parse(&mut self, data: &[u8]) -> Result<(), crate::ParseError>;
+    }
+
+    pub trait CopyFrom: AsView + SealedInternal {
+        fn copy_from(&mut self, src: impl AsView<Proxied = Self::Proxied>);
+    }
+
+    /// Moves the contents from `src` into `self`. Any previous state of `self` is discarded,
+    /// and if `src` is still observable after this call (if it a MessageMut of another message),
+    /// then `src` is guaranteed to be empty after this call (but any presence on the parent will
+    /// not be affected).
+    pub trait TakeFrom: AsView + SealedInternal {
+        fn take_from(&mut self, src: impl AsMut<MutProxied = Self::Proxied>);
     }
 
     pub trait MergeFrom: AsView + SealedInternal {
@@ -212,6 +224,7 @@ pub(crate) mod interop {
         ///   let m = unsafe { __unstable_wrap_raw_message_mut(&mut msg) };
         ///   do_something_with_mut(m);
         /// }
+        /// ```
         ///
         /// # Safety
         ///   - The underlying message must be for the same type as `Self`
