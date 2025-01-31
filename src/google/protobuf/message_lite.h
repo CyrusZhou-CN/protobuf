@@ -961,26 +961,6 @@ class PROTOBUF_EXPORT MessageLite {
   }
 
 #if defined(PROTOBUF_CUSTOM_VTABLE)
-  explicit constexpr MessageLite(const internal::ClassData* data)
-      : _class_data_(data) {}
-  explicit MessageLite(Arena* arena, const internal::ClassData* data)
-      : _internal_metadata_(arena), _class_data_(data) {}
-#else   // PROTOBUF_CUSTOM_VTABLE
-  constexpr MessageLite() {}
-  explicit MessageLite(Arena* arena) : _internal_metadata_(arena) {}
-  explicit constexpr MessageLite(const internal::ClassData*) {}
-  explicit MessageLite(Arena* arena, const internal::ClassData*)
-      : _internal_metadata_(arena) {}
-#endif  // PROTOBUF_CUSTOM_VTABLE
-
-  // GetClassData() returns a pointer to a ClassData struct which
-  // exists in global memory and is unique to each subclass.  This uniqueness
-  // property is used in order to quickly determine whether two messages are
-  // of the same type.
-  //
-  // This is a work in progress. There are still some types (eg MapEntry) that
-  // return a default table instead of a unique one.
-#if defined(PROTOBUF_CUSTOM_VTABLE)
   const internal::ClassData* GetClassData() const {
     ::absl::PrefetchToLocalCache(_class_data_);
     return _class_data_;
