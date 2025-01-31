@@ -1437,6 +1437,26 @@ internal::RepeatedFieldBackInsertIterator<T> RepeatedFieldBackInserter(
   return internal::RepeatedFieldBackInsertIterator<T>(mutable_field);
 }
 
+template <typename T>
+inline void CheckIndexInBoundsOrAbort(const RepeatedField<T>& field,
+                                      int index) {
+  if (ABSL_PREDICT_FALSE(index < 0 || index >= field.size())) {
+    internal::LogIndexOutOfBoundsAndAbort(index, field.size());
+  }
+}
+
+template <typename T>
+const T& CheckedGetOrAbort(const RepeatedField<T>& field, int index) {
+  CheckIndexInBoundsOrAbort(field, index);
+  return field.Get(index);
+}
+
+template <typename T>
+inline T* CheckedMutableOrAbort(RepeatedField<T>* field, int index) {
+  CheckIndexInBoundsOrAbort(*field, index);
+  return field->Mutable(index);
+}
+
 
 }  // namespace protobuf
 }  // namespace google

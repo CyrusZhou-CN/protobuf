@@ -851,14 +851,14 @@ void RepeatedString::GenerateInlineAccessorDefinitions(io::Printer* p) const {
   bool bytes = field_->type() == FieldDescriptor::TYPE_BYTES;
   p->Emit(
       {
-          GetEmitRepeatedFieldGetterSub(*opts_, p),
+          GetEmitRepeatedFieldGetterSub(*opts_, p, field_),
           {"bytes_tag",
            [&] {
              if (bytes) {
                p->Emit(", $pbi$::BytesTag{}");
              }
            }},
-          GetEmitRepeatedFieldMutableSub(*opts_, p),
+          GetEmitRepeatedFieldMutableSub(*opts_, p, field_),
       },
       R"cc(
         inline std::string* $nonnull$ $Msg$::add_$name$()

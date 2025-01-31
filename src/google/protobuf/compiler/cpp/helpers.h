@@ -1190,10 +1190,13 @@ bool NeedsPostLoopHandler(const Descriptor* descriptor, const Options& options);
 // Depending on the bounds check mode specified, this will emit the
 // corresponding getter.
 inline auto GetEmitRepeatedFieldGetterSub(const Options& options,
-                                          io::Printer* p) {
+                                          io::Printer* p,
+                                          const FieldDescriptor* field) {
+  bool is_pointer_field =
+      field != nullptr && (field->type() == FieldDescriptor::TYPE_MESSAGE);
   return io::Printer::Sub{
       "getter",
-      [&options, p] {
+      [&options, p, is_pointer_field] {
         switch (options.bounds_check_mode) {
           case BoundsCheckMode::kNoEnforcement:
             p->Emit(R"cc(_internal_$name_internal$().Get(index))cc");
@@ -1204,9 +1207,15 @@ inline auto GetEmitRepeatedFieldGetterSub(const Options& options,
             )cc");
             break;
           case BoundsCheckMode::kAbort:
-            p->Emit(R"cc(
-              $pbi$::CheckedGetOrAbort(_internal_$name_internal$(), index)
-            )cc");
+            if (is_pointer_field) {
+              p->Emit(R"cc(
+                $pbi$::CheckedGetOrAbort(_internal_$name_internal$(), index)
+              )cc");
+            } else {
+              p->Emit(R"cc(
+                CheckedGetOrAbort(_internal_$name_internal$(), index)
+              )cc");
+            }
             break;
         }
       }}
@@ -1220,14 +1229,23 @@ inline auto GetEmitRepeatedFieldGetterSub(const Options& options,
 // if splitting is supported.
 inline auto GetEmitRepeatedFieldMutableSub(const Options& options,
                                            io::Printer* p,
-                                           bool use_stringpiecefield = false) {
+                                           const FieldDescriptor* field,
+                                           bool is_pointer = false) {
+  bool is_stringpiecefield =
+      field->cpp_type() == FieldDescriptor::CPPTYPE_STRING &&
+      field->cpp_string_type() == FieldDescriptor::CppStringType::kStringPiece;
+
+  bool is_pointer_field = false;
+  if (field != nullptr && (field->type() == FieldDescriptor::TYPE_MESSAGE)) {
+    is_pointer_field = true;
+  }
   return io::Printer::Sub{
       "mutable",
-      [&options, p, use_stringpiecefield] {
+      [&options, p, is_pointer_field, is_stringpiecefield] {
         switch (options.bounds_check_mode) {
           case BoundsCheckMode::kNoEnforcement:
           case BoundsCheckMode::kReturnDefaultValue:
-            if (use_stringpiecefield) {
+            if (is_stringpiecefield || !is_pointer_field) {
               p->Emit("$field$.Mutable(index)");
             } else {
               p->Emit(
@@ -1235,12 +1253,15 @@ inline auto GetEmitRepeatedFieldMutableSub(const Options& options,
             }
             break;
           case BoundsCheckMode::kAbort:
-            if (use_stringpiecefield) {
+            if (is_stringpiecefield) {
               p->Emit("$pbi$::CheckedMutableOrAbort(&$field$, index)");
+            } else if (is_pointer_field) {
+              p->Emit(
+                  R"cc($pbi$::CheckedMutableOrAbort(
+                           _internal_mutable_$name_internal$(), index))cc");
             } else {
               p->Emit(R"cc(
-                $pbi$::CheckedMutableOrAbort(
-                    _internal_mutable_$name_internal$(), index)
+                CheckedMutableOrAbort(&$field$, index)
               )cc");
             }
             break;
@@ -1248,7 +1269,7 @@ inline auto GetEmitRepeatedFieldMutableSub(const Options& options,
       }}
       .WithSuffix("");
 }
-
+// field->type() == FieldDescriptor::TYPE_MESSAGE
 // Priority used for static initializers.
 enum InitPriority {
   kInitPriority101,
