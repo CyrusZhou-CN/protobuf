@@ -14,13 +14,14 @@
 #ifndef GOOGLE_PROTOBUF_DESCRIPTOR_DATABASE_H__
 #define GOOGLE_PROTOBUF_DESCRIPTOR_DATABASE_H__
 
+#include <memory>
 #include <string>
 #include <utility>
 #include <vector>
 
 #include "absl/container/btree_map.h"
+#include "absl/strings/string_view.h"
 #include "google/protobuf/descriptor.h"
-#include "google/protobuf/port.h"
 
 // Must be included last.
 #include "google/protobuf/port_def.inc"
@@ -58,6 +59,10 @@ class PROTOBUF_EXPORT DescriptorDatabase {
   // Otherwise, returns false, leaving the contents of *output undefined.
   virtual bool FindFileByName(const std::string& filename,
                               FileDescriptorProto* output) = 0;
+  virtual bool FindFileByName(absl::string_view filename,
+                              FileDescriptorProto* output) {
+    return FindFileByName(std::string(filename), output);
+  }
 
   // Find the file that declares the given fully-qualified symbol name.
   // If found, fills in *output and returns true, otherwise returns false
@@ -159,6 +164,8 @@ class PROTOBUF_EXPORT SimpleDescriptorDatabase : public DescriptorDatabase {
 
   // implements DescriptorDatabase -----------------------------------
   bool FindFileByName(const std::string& filename,
+                      FileDescriptorProto* output) override;
+  bool FindFileByName(absl::string_view filename,
                       FileDescriptorProto* output) override;
   bool FindFileContainingSymbol(const std::string& symbol_name,
                                 FileDescriptorProto* output) override;
@@ -289,6 +296,8 @@ class PROTOBUF_EXPORT EncodedDescriptorDatabase : public DescriptorDatabase {
   // implements DescriptorDatabase -----------------------------------
   bool FindFileByName(const std::string& filename,
                       FileDescriptorProto* output) override;
+  bool FindFileByName(absl::string_view filename,
+                      FileDescriptorProto* output) override;
   bool FindFileContainingSymbol(const std::string& symbol_name,
                                 FileDescriptorProto* output) override;
   bool FindFileContainingExtension(const std::string& containing_type,
@@ -329,6 +338,8 @@ class PROTOBUF_EXPORT DescriptorPoolDatabase : public DescriptorDatabase {
   // implements DescriptorDatabase -----------------------------------
   bool FindFileByName(const std::string& filename,
                       FileDescriptorProto* output) override;
+  bool FindFileByName(absl::string_view filename,
+                      FileDescriptorProto* output) override;
   bool FindFileContainingSymbol(const std::string& symbol_name,
                                 FileDescriptorProto* output) override;
   bool FindFileContainingExtension(const std::string& containing_type,
@@ -360,6 +371,8 @@ class PROTOBUF_EXPORT MergedDescriptorDatabase : public DescriptorDatabase {
 
   // implements DescriptorDatabase -----------------------------------
   bool FindFileByName(const std::string& filename,
+                      FileDescriptorProto* output) override;
+  bool FindFileByName(absl::string_view filename,
                       FileDescriptorProto* output) override;
   bool FindFileContainingSymbol(const std::string& symbol_name,
                                 FileDescriptorProto* output) override;
