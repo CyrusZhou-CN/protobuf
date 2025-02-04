@@ -11,9 +11,6 @@
 #include <memory>
 #include <type_traits>
 
-class upb_Message;
-class upb_Arena;
-
 namespace hpb {
 
 template <typename T>
