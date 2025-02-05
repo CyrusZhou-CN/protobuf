@@ -69,6 +69,10 @@ class PROTOBUF_EXPORT DescriptorDatabase {
   // and leaves *output undefined.
   virtual bool FindFileContainingSymbol(const std::string& symbol_name,
                                         FileDescriptorProto* output) = 0;
+  virtual bool FindFileContainingSymbol(absl::string_view symbol_name,
+                                        FileDescriptorProto* output) {
+    return FindFileContainingSymbol(std::string(symbol_name), output);
+  }
 
   // Find the file which defines an extension extending the given message type
   // with the given field number.  If found, fills in *output and returns true,
@@ -77,7 +81,12 @@ class PROTOBUF_EXPORT DescriptorDatabase {
   virtual bool FindFileContainingExtension(const std::string& containing_type,
                                            int field_number,
                                            FileDescriptorProto* output) = 0;
-
+  virtual bool FindFileContainingExtension(absl::string_view containing_type,
+                                           int field_number,
+                                           FileDescriptorProto* output) {
+    return FindFileContainingExtension(std::string(containing_type),
+                                       field_number, output);
+  }
   // Finds the tag numbers used by all known extensions of
   // extendee_type, and appends them to output in an undefined
   // order. This method is best-effort: it's not guaranteed that the
@@ -91,6 +100,10 @@ class PROTOBUF_EXPORT DescriptorDatabase {
   virtual bool FindAllExtensionNumbers(const std::string& /* extendee_type */,
                                        std::vector<int>* /* output */) {
     return false;
+  }
+  virtual bool FindAllExtensionNumbers(absl::string_view extendee_type,
+                                       std::vector<int>* output) {
+    return FindAllExtensionNumbers(std::string(extendee_type), output);
   }
 
 
@@ -169,10 +182,17 @@ class PROTOBUF_EXPORT SimpleDescriptorDatabase : public DescriptorDatabase {
                       FileDescriptorProto* output) override;
   bool FindFileContainingSymbol(const std::string& symbol_name,
                                 FileDescriptorProto* output) override;
+  bool FindFileContainingSymbol(absl::string_view symbol_name,
+                                FileDescriptorProto* output) override;
   bool FindFileContainingExtension(const std::string& containing_type,
                                    int field_number,
                                    FileDescriptorProto* output) override;
+  bool FindFileContainingExtension(absl::string_view containing_type,
+                                   int field_number,
+                                   FileDescriptorProto* output) override;
   bool FindAllExtensionNumbers(const std::string& extendee_type,
+                               std::vector<int>* output) override;
+  bool FindAllExtensionNumbers(absl::string_view extendee_type,
                                std::vector<int>* output) override;
 
   bool FindAllFileNames(std::vector<std::string>* output) override;
