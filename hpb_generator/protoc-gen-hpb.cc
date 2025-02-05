@@ -78,13 +78,6 @@ bool Generator::Generate(const protobuf::FileDescriptor* file,
     }
   }
 
-  // Write model.upb.fwd.h
-  std::unique_ptr<google::protobuf::io::ZeroCopyOutputStream> output_stream(
-      context->Open(ForwardingHeaderFilename(file)));
-  Context fwd_ctx =
-      Context(file, output_stream.get(), Options{.backend = Backend::UPB});
-  WriteForwardingHeader(file, fwd_ctx);
-
   // Write model.upb.proto.h
   std::unique_ptr<google::protobuf::io::ZeroCopyOutputStream> header_output_stream(
       context->Open(CppHeaderFilename(file)));
