@@ -1548,15 +1548,14 @@ class ReallyBigInputStream : public ZeroCopyInputStream {
 
     switch (buffer_count_++) {
       case 0:
-        *data = buffer_;
-        *size = sizeof(buffer_);
+        *data = buffer_.get();
+        *size = 1024;
         return true;
       case 1:
         // Return an enormously large buffer that, when combined with the 1k
         // returned already, should overflow the total_bytes_read_ counter in
-        // CodedInputStream.  Note that we'll only read the first 1024 bytes
-        // of this buffer so it's OK that we have it point at buffer_.
-        *data = buffer_;
+        // CodedInputStream.
+        *data = buffer_.get();
         *size = INT_MAX;
         return true;
       default:
@@ -1578,7 +1577,8 @@ class ReallyBigInputStream : public ZeroCopyInputStream {
   int backup_amount_;
 
  private:
-  char buffer_[1024] = {};
+  std::unique_ptr<char[], void (*)(void*)> buffer_{
+      static_cast<char*>(calloc(INT_MAX, 1)), free};
   int64_t buffer_count_;
 };
 
