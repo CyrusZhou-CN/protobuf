@@ -869,6 +869,49 @@ TEST(NoFieldPresenceTest, MergeFromIfNonzeroTest) {
   EXPECT_EQ("test2", dest.optional_string());
 }
 
+TEST(NoFieldPresenceTest, ParseEmptyStringFromWire) {
+  TestAllTypes empty_message;
+
+  // Input wire tag: 0x7A which is 01111 010
+  //   Field number 15 with wire type LEN
+  // Explicitly specify LEN to be zero, then it's basically an empty string
+  //   encoded on the wire.
+  constexpr absl::string_view wire("\x7A\x00", 2);
+
+  TestAllTypes message;
+  message.MergeFromString(wire);
+
+  // Implicit-presence fields don't have hazzers, so we can only verify that the
+  // empty bytes field is not overwritten.
+  EXPECT_EQ(empty_message.optional_bytes(), message.optional_bytes());
+
+  std::string output_data;
+  EXPECT_TRUE(message.SerializeToString(&output_data));
+  EXPECT_TRUE(output_data.empty());
+}
+
+TEST(MessageTest, ParseEmptyStringFromWireOverwritesExistingField) {
+  TestAllTypes message;
+  message.set_optional_bytes("hello");
+
+  // Input wire tag: 0x7A which is 01111 010
+  //   Field number 15 with wire type LEN
+  // Explicitly specify LEN to be zero, then it's basically an empty string
+  //   encoded on the wire.
+  constexpr absl::string_view wire("\x7A\x00", 2);
+  message.MergeFromString(wire);
+
+  // Implicit-presence fields don't have hazzers, so we can only verify that the
+  // empty bytes field is overwritten.
+  EXPECT_THAT(message.optional_bytes(), IsEmpty());
+
+  // Since string field is overwritten to be empty, this message will not
+  // serialize.
+  std::string output_data;
+  EXPECT_TRUE(message.SerializeToString(&output_data));
+  EXPECT_TRUE(output_data.empty());
+}
+
 TEST(NoFieldPresenceTest, ExtraZeroesInWireParseTest) {
   // check extra serialized zeroes on the wire are parsed into the object.
   ForeignMessage dest;
