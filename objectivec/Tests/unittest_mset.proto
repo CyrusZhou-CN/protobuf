@@ -44,6 +44,14 @@ message MessageExtension2 {
   optional string str = 25;
 }
 
+// This isn't on Message, so it will be unknown when parsing there
+message MessageExtension3 {
+  extend MessageEx {
+    optional MessageExtension3 doppelganger_message_set_extension = 1547770;
+  }
+  optional int32 x = 26;
+}
+
 // MessageSet wire format is equivalent to this.
 message RawMessageSet {
   repeated group Item = 1 {
