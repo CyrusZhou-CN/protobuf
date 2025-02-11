@@ -47,6 +47,7 @@
 #include "google/protobuf/io/printer.h"
 
 // Must be last.
+#include "google/protobuf/port.h"
 #include "google/protobuf/port_def.inc"
 
 namespace google {
