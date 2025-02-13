@@ -92,7 +92,7 @@ jobs:
         with:
           credentials: ${{ secrets.GAR_SERVICE_ACCOUNT }}
           bazel-cache: "upb-bazel-windows"
-          bazel: test --noenable_bzlmod --cxxopt=/std:c++17 --host_cxxopt=/std:c++17 //upb/... //upb_generator/... //python/...
+          bazel: test --noenable_bzlmod //upb/... //upb_generator/... //python/...
           version: 7.1.2
           exclude-targets: -//python:conformance_test -//upb/reflection:def_builder_test
 
