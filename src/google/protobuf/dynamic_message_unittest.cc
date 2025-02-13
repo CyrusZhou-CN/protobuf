@@ -32,6 +32,8 @@
 #include "google/protobuf/unittest_no_field_presence.pb.h"
 
 
+#include "port_def.inc"
+
 namespace google {
 namespace protobuf {
 namespace {
