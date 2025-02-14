@@ -185,10 +185,19 @@ void GPBMessageDropUnknownFieldsRecursively(GPBMessage *initialMessage) {
 //    the header check comes into play again. But this time it is checking that
 //    the current library headers being used still support/match the ones for
 //    the generated code.
-// 3. At runtime the final check here (GPBCheckRuntimeVersionsInternal), is
+// 3. The generaged code references an exported
+//    GOOGLE_PROTOBUF_OBJC_EXPECTED_GENCODE_VERSION_*, thus ensuring link/runtime
+//    that a matching version of the runtime is still being used.
+// 4. At runtime the final check here (GPBCheckRuntimeVersionsInternal), is
 //    called from the generated code passing in values captured when the
 //    generated code's .o was made. This checks that at runtime the generated
 //    code and runtime library match.
+
+const int32_t GOOGLE_PROTOBUF_OBJC_EXPECTED_GENCODE_VERSION_40310 = 40310;
+
+#if GOOGLE_PROTOBUF_OBJC_MIN_SUPPORTED_VERSION > 30007
+#error "Time to remove this and GPB_DEBUG_CHECK_RUNTIME_VERSIONS()"
+#else
 
 void GPBCheckRuntimeVersionSupport(int32_t objcRuntimeVersion) {
   // NOTE: This is passing the value captured in the compiled code to check
@@ -211,6 +220,8 @@ void GPBCheckRuntimeVersionSupport(int32_t objcRuntimeVersion) {
                        objcRuntimeVersion, GOOGLE_PROTOBUF_OBJC_MIN_SUPPORTED_VERSION];
   }
 }
+
+#endif  // GOOGLE_PROTOBUF_OBJC_MIN_SUPPORTED_VERSION > 30007
 
 void GPBRuntimeMatchFailure(void) {
   [NSException raise:NSInternalInconsistencyException
