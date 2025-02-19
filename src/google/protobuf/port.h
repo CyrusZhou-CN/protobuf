@@ -44,6 +44,8 @@ class MessageLite;
 
 namespace internal {
 
+PROTOBUF_EXPORT size_t StringSpaceUsedExcludingSelfLong(const std::string& str);
+
 struct MessageTraitsImpl;
 
 template <typename T>
@@ -521,6 +523,7 @@ class alignas(8) GlobalEmptyString {
 };
 PROTOBUF_EXPORT extern GlobalEmptyString fixed_address_empty_string;
 #endif
+
 
 }  // namespace internal
 }  // namespace protobuf

@@ -1974,11 +1974,9 @@ absl::Cord Reflection::GetCord(const Message& message,
   }
 }
 
-absl::string_view Reflection::GetStringView(const Message& message,
-                                            const FieldDescriptor* field,
-                                            ScratchSpace& scratch) const {
-  USAGE_CHECK_ALL(GetStringView, SINGULAR, STRING);
-
+absl::string_view Reflection::GetStringViewImpl(const Message& message,
+                                                const FieldDescriptor* field,
+                                                ScratchSpace* scratch) const {
   if (field->is_extension()) {
     return GetExtensionSet(message).GetString(
         field->number(), internal::DefaultValueStringAsString(field));
@@ -1992,12 +1990,20 @@ absl::string_view Reflection::GetStringView(const Message& message,
       const auto& cord = schema_.InRealOneof(field)
                              ? *GetField<absl::Cord*>(message, field)
                              : GetField<absl::Cord>(message, field);
-      return scratch.CopyFromCord(cord);
+      ABSL_DCHECK(scratch);
+      return scratch->CopyFromCord(cord);
     }
     default:
       auto str = GetField<ArenaStringPtr>(message, field);
       return str.IsDefault() ? field->default_value_string() : str.Get();
   }
+}
+
+absl::string_view Reflection::GetStringView(const Message& message,
+                                            const FieldDescriptor* field,
+                                            ScratchSpace& scratch) const {
+  USAGE_CHECK_ALL(GetStringView, SINGULAR, STRING);
+  return GetStringViewImpl(message, field, &scratch);
 }
 
 
@@ -2143,12 +2149,9 @@ const std::string& Reflection::GetRepeatedStringReference(
 }
 
 // See GetStringView(), above.
-absl::string_view Reflection::GetRepeatedStringView(
+absl::string_view Reflection::GetRepeatedStringViewImpl(
     const Message& message, const FieldDescriptor* field, int index,
-    ScratchSpace& scratch) const {
-  (void)scratch;
-  USAGE_CHECK_ALL(GetRepeatedStringView, REPEATED, STRING);
-
+    ScratchSpace* scratch) const {
   if (field->is_extension()) {
     return GetExtensionSet(message).GetRepeatedString(field->number(), index);
   }
@@ -2156,13 +2159,21 @@ absl::string_view Reflection::GetRepeatedStringView(
   switch (field->cpp_string_type()) {
     case FieldDescriptor::CppStringType::kCord: {
       auto& cord = GetRepeatedField<absl::Cord>(message, field, index);
-      return scratch.CopyFromCord(cord);
+      ABSL_DCHECK(scratch);
+      return scratch->CopyFromCord(cord);
     }
     case FieldDescriptor::CppStringType::kView:
     case FieldDescriptor::CppStringType::kString:
       return GetRepeatedPtrField<std::string>(message, field, index);
   }
   internal::Unreachable();
+}
+
+absl::string_view Reflection::GetRepeatedStringView(
+    const Message& message, const FieldDescriptor* field, int index,
+    ScratchSpace& scratch) const {
+  USAGE_CHECK_ALL(GetRepeatedStringView, REPEATED, STRING);
+  return GetRepeatedStringViewImpl(message, field, index, &scratch);
 }
 
 
@@ -2939,17 +2950,6 @@ ExtensionSet* Reflection::MutableExtensionSet(Message* message) const {
                                           schema_.GetExtensionSetOffset());
 }
 
-const InternalMetadata& Reflection::GetInternalMetadata(
-    const Message& message) const {
-  return GetConstRefAtOffset<InternalMetadata>(message,
-                                               schema_.GetMetadataOffset());
-}
-
-InternalMetadata* Reflection::MutableInternalMetadata(Message* message) const {
-  return GetPointerAtOffset<InternalMetadata>(message,
-                                              schema_.GetMetadataOffset());
-}
-
 const uint32_t* Reflection::GetInlinedStringDonatedArray(
     const Message& message) const {
   ABSL_DCHECK(schema_.HasInlinedString());
@@ -3672,22 +3672,21 @@ ReflectionSchema MigrationToReflectionSchema(
     MigrationSchema migration_schema) {
   ReflectionSchema result;
   result.default_instance_ = *default_instance;
-  // First 9 offsets are offsets to the special fields. The following offsets
+  // First 8 offsets are offsets to the special fields. The following offsets
   // are the proto fields.
   //
   // TODO: Find a way to not encode sizeof_split_ in offsets.
-  result.offsets_ = offsets + migration_schema.offsets_index + 8;
+  result.offsets_ = offsets + migration_schema.offsets_index + 7;
   result.has_bit_indices_ = offsets + migration_schema.has_bit_indices_index;
   result.has_bits_offset_ = offsets[migration_schema.offsets_index + 0];
-  result.metadata_offset_ = offsets[migration_schema.offsets_index + 1];
-  result.extensions_offset_ = offsets[migration_schema.offsets_index + 2];
-  result.oneof_case_offset_ = offsets[migration_schema.offsets_index + 3];
+  result.extensions_offset_ = offsets[migration_schema.offsets_index + 1];
+  result.oneof_case_offset_ = offsets[migration_schema.offsets_index + 2];
   result.object_size_ = migration_schema.object_size;
-  result.weak_field_map_offset_ = offsets[migration_schema.offsets_index + 4];
+  result.weak_field_map_offset_ = offsets[migration_schema.offsets_index + 3];
   result.inlined_string_donated_offset_ =
-      offsets[migration_schema.offsets_index + 5];
-  result.split_offset_ = offsets[migration_schema.offsets_index + 6];
-  result.sizeof_split_ = offsets[migration_schema.offsets_index + 7];
+      offsets[migration_schema.offsets_index + 4];
+  result.split_offset_ = offsets[migration_schema.offsets_index + 5];
+  result.sizeof_split_ = offsets[migration_schema.offsets_index + 6];
   result.inlined_string_indices_ =
       offsets + migration_schema.inlined_string_indices_index;
   return result;

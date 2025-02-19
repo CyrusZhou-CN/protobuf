@@ -1360,10 +1360,15 @@ class AccessorVerifier {
 
 }  // namespace
 
+template <bool kIsV2>
 void MessageGenerator::EmitCheckAndUpdateByteSizeForField(
     const FieldDescriptor* field, io::Printer* p) const {
   absl::AnyInvocable<void()> emit_body = [&] {
-    field_generators_.get(field).GenerateByteSize(p);
+    const auto& gen = field_generators_.get(field);
+    if constexpr (!kIsV2) {
+      gen.GenerateByteSize(p);
+    } else {
+    }
   };
 
   if (!HasHasbit(field)) {
@@ -1399,6 +1404,7 @@ void MessageGenerator::EmitCheckAndUpdateByteSizeForField(
           )cc");
 }
 
+template <bool kIsV2>
 void MessageGenerator::EmitUpdateByteSizeForField(
     const FieldDescriptor* field, io::Printer* p,
     int& cached_has_word_index) const {
@@ -1419,7 +1425,7 @@ void MessageGenerator::EmitUpdateByteSizeForField(
                   )cc");
         }},
        {"check_and_update_byte_size_for_field",
-        [&]() { EmitCheckAndUpdateByteSizeForField(field, p); }}},
+        [&]() { EmitCheckAndUpdateByteSizeForField<kIsV2>(field, p); }}},
       R"cc(
         $comment$;
         $update_cached_has_bits$;
@@ -1514,9 +1520,8 @@ void MessageGenerator::GenerateMapEntryClassDefinition(io::Printer* p) {
           template <typename = void>
           explicit PROTOBUF_CONSTEXPR $classname$($pbi$::ConstantInitialized);
           explicit $classname$($pb$::Arena* $nullable$ arena);
-          static const $classname$* $nonnull$ internal_default_instance() {
-            return reinterpret_cast<const $classname$*>(
-                &_$classname$_default_instance_);
+          static constexpr const void* $nonnull$ internal_default_instance() {
+            return &_$classname$_default_instance_;
           }
 
           $decl_verify_func$;
@@ -2547,6 +2552,7 @@ void MessageGenerator::GenerateClassMethods(io::Printer* p) {
     GenerateByteSize(p);
     p->Emit("\n");
 
+
     GenerateClassSpecificMergeImpl(p);
     p->Emit("\n");
 
@@ -2647,7 +2653,6 @@ std::pair<size_t, size_t> MessageGenerator::GenerateOffsets(io::Printer* p) {
   } else {
     format("~0u,  // no _has_bits_\n");
   }
-  format("PROTOBUF_FIELD_OFFSET($classtype$, _internal_metadata_),\n");
   if (descriptor_->extension_range_count() > 0) {
     format("PROTOBUF_FIELD_OFFSET($classtype$, $extensions$),\n");
   } else {
@@ -2679,7 +2684,7 @@ std::pair<size_t, size_t> MessageGenerator::GenerateOffsets(io::Printer* p) {
         "~0u,  // no _split_\n"
         "~0u,  // no sizeof(Split)\n");
   }
-  const int kNumGenericOffsets = 8;  // the number of fixed offsets above
+  const int kNumGenericOffsets = 7;  // the number of fixed offsets above
   const size_t offsets = kNumGenericOffsets + descriptor_->field_count() +
                          descriptor_->real_oneof_decl_count();
   size_t entries = offsets;
@@ -5127,6 +5132,7 @@ void MessageGenerator::GenerateByteSize(io::Printer* p) {
             return total_size;
           }
         )cc");
+    p->Emit("\n");
     return;
   }
 
@@ -5410,6 +5416,9 @@ void MessageGenerator::GenerateByteSize(io::Printer* p) {
           $handle_unknown_fields$;
         }
       )cc");
+}
+
+void MessageGenerator::GenerateByteSizeV2(io::Printer* p) {
 }
 
 bool MessageGenerator::NeedsIsInitialized() {

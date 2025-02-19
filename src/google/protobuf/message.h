@@ -987,6 +987,15 @@ class PROTOBUF_EXPORT Reflection final {
   RepeatedPtrField<T>* MutableRepeatedPtrFieldInternal(
       Message* message, const FieldDescriptor* field) const;
 
+  // REQUIRES: If the field is Cord, then `scratch != nullptr`.
+  absl::string_view GetStringViewImpl(const Message& message,
+                                      const FieldDescriptor* field,
+                                      ScratchSpace* scratch) const;
+  absl::string_view GetRepeatedStringViewImpl(const Message& message,
+                                              const FieldDescriptor* field,
+                                              int index,
+                                              ScratchSpace* scratch) const;
+
   // Obtain a pointer to a Repeated Field Structure and do some type checking:
   //   on field->cpp_type(),
   //   on field->field_option().ctype() (if ctype >= 0)
@@ -1235,9 +1244,13 @@ class PROTOBUF_EXPORT Reflection final {
   internal::ExtensionSet* MutableExtensionSet(Message* message) const;
 
   const internal::InternalMetadata& GetInternalMetadata(
-      const Message& message) const;
+      const Message& message) const {
+    return message._internal_metadata_;
+  }
 
-  internal::InternalMetadata* MutableInternalMetadata(Message* message) const;
+  internal::InternalMetadata* MutableInternalMetadata(Message* message) const {
+    return &message->_internal_metadata_;
+  }
 
   inline bool IsInlined(const FieldDescriptor* field) const {
     return schema_.IsFieldInlined(field);

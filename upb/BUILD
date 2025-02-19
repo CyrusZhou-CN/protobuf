@@ -23,7 +23,6 @@ exports_files(["LICENSE"])
 exports_files(
     [
         "BUILD",
-        "WORKSPACE",
     ],
     visibility = ["//upb/cmake:__pkg__"],
 )
@@ -352,6 +351,7 @@ upb_amalgamation(
         "//upb/mini_table:internal",
         "//upb/reflection:descriptor_upb_proto",
         "//upb/reflection:internal",
+        "//upb/util:def_to_proto",
     ],
     prefix = "ruby-",
     strip_import_prefix = ["src"],

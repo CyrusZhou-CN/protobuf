@@ -15,6 +15,7 @@
 #define GOOGLE_PROTOBUF_MAP_H__
 
 #include <algorithm>
+#include <atomic>
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
@@ -159,18 +160,6 @@ struct TransparentSupport<std::string> {
   }
 };
 
-enum class MapNodeSizeInfoT : uint32_t;
-inline uint16_t SizeFromInfo(MapNodeSizeInfoT node_size_info) {
-  return static_cast<uint16_t>(static_cast<uint32_t>(node_size_info) >> 16);
-}
-inline constexpr uint16_t ValueOffsetFromInfo(MapNodeSizeInfoT node_size_info) {
-  return static_cast<uint16_t>(static_cast<uint32_t>(node_size_info) >> 0);
-}
-constexpr MapNodeSizeInfoT MakeNodeInfo(uint16_t size, uint16_t value_offset) {
-  return static_cast<MapNodeSizeInfoT>((static_cast<uint32_t>(size) << 16) |
-                                       value_offset);
-}
-
 struct NodeBase {
   // Align the node to allow KeyNode to predict the location of the key.
   // This way sizeof(NodeBase) contains any possible padding it was going to
@@ -179,10 +168,6 @@ struct NodeBase {
 
   void* GetVoidKey() { return this + 1; }
   const void* GetVoidKey() const { return this + 1; }
-
-  void* GetVoidValue(MapNodeSizeInfoT size_info) {
-    return reinterpret_cast<char*>(this) + ValueOffsetFromInfo(size_info);
-  }
 };
 
 constexpr size_t kGlobalEmptyTableSize = 1;
@@ -309,8 +294,13 @@ class PROTOBUF_EXPORT UntypedMapBase {
     uint16_t node_size;
     // Equivalent to `offsetof(Node, kv.second)` in the derived type.
     uint8_t value_offset;
-    TypeKind key_type : 4;
-    TypeKind value_type : 4;
+    uint8_t key_type : 4;
+    uint8_t value_type : 4;
+
+    TypeKind key_type_kind() const { return static_cast<TypeKind>(key_type); }
+    TypeKind value_type_kind() const {
+      return static_cast<TypeKind>(value_type);
+    }
   };
   static_assert(sizeof(TypeInfo) == 4);
 
@@ -489,7 +479,7 @@ class PROTOBUF_EXPORT UntypedMapBase {
 
 template <typename F>
 auto UntypedMapBase::VisitKeyType(F f) const {
-  switch (type_info_.key_type) {
+  switch (type_info_.key_type_kind()) {
     case TypeKind::kBool:
       return f(std::enable_if<true, bool>{});
     case TypeKind::kU32:
@@ -509,7 +499,7 @@ auto UntypedMapBase::VisitKeyType(F f) const {
 
 template <typename F>
 auto UntypedMapBase::VisitValueType(F f) const {
-  switch (type_info_.value_type) {
+  switch (type_info_.value_type_kind()) {
     case TypeKind::kBool:
       return f(std::enable_if<true, bool>{});
     case TypeKind::kU32:
@@ -594,22 +584,65 @@ inline void UntypedMapIterator::PlusPlus() {
 class MapFieldBaseForParse {
  public:
   const UntypedMapBase& GetMap() const {
-    return vtable_->get_map(*this, false);
+    const auto p = payload_.load(std::memory_order_acquire);
+    // If this instance has a payload, then it might need sync'n.
+    if (ABSL_PREDICT_FALSE(IsPayload(p))) {
+      sync_map_with_repeated.load(std::memory_order_relaxed)(*this, false);
+    }
+    return GetMapRaw();
   }
+
   UntypedMapBase* MutableMap() {
-    return &const_cast<UntypedMapBase&>(vtable_->get_map(*this, true));
+    const auto p = payload_.load(std::memory_order_acquire);
+    // If this instance has a payload, then it might need sync'n.
+    if (ABSL_PREDICT_FALSE(IsPayload(p))) {
+      sync_map_with_repeated.load(std::memory_order_relaxed)(*this, true);
+    }
+    return &GetMapRaw();
   }
 
  protected:
-  struct VTable {
-    const UntypedMapBase& (*get_map)(const MapFieldBaseForParse&,
-                                     bool is_mutable);
-  };
-  explicit constexpr MapFieldBaseForParse(const VTable* vtable)
-      : vtable_(vtable) {}
+  static constexpr size_t MapOffset() { return sizeof(MapFieldBaseForParse); }
+
+  // See assertion in TypeDefinedMapFieldBase::TypeDefinedMapFieldBase()
+  const UntypedMapBase& GetMapRaw() const {
+    return *reinterpret_cast<const UntypedMapBase*>(
+        reinterpret_cast<const char*>(this) + MapOffset());
+  }
+  UntypedMapBase& GetMapRaw() {
+    return *reinterpret_cast<UntypedMapBase*>(reinterpret_cast<char*>(this) +
+                                              MapOffset());
+  }
+
+  // Injected from map_field.cc once we need to use it.
+  // We can't have a strong dep on it because it would cause protobuf_lite to
+  // depend on reflection.
+  using SyncFunc = void (*)(const MapFieldBaseForParse&, bool is_mutable);
+  static std::atomic<SyncFunc> sync_map_with_repeated;
+
+  // The prototype is a `Message`, but due to restrictions on constexpr in the
+  // codegen we are receiving it as `void` during constant evaluation.
+  explicit constexpr MapFieldBaseForParse(const void* prototype_as_void)
+      : prototype_as_void_(prototype_as_void) {}
+
+  enum class TaggedPtr : uintptr_t {};
+  explicit MapFieldBaseForParse(const Message* prototype, TaggedPtr ptr)
+      : payload_(ptr), prototype_as_void_(prototype) {
+    // We should not have a payload on construction.
+    ABSL_DCHECK(!IsPayload(ptr));
+  }
+
   ~MapFieldBaseForParse() = default;
 
-  const VTable* vtable_;
+  static constexpr uintptr_t kHasPayloadBit = 1;
+
+  static bool IsPayload(TaggedPtr p) {
+    return static_cast<uintptr_t>(p) & kHasPayloadBit;
+  }
+
+  mutable std::atomic<TaggedPtr> payload_{};
+  const void* prototype_as_void_;
+  PROTOBUF_TSAN_DECLARE_MEMBER;
 };
 
 // The value might be of different signedness, so use memcpy to extract it.
@@ -1411,10 +1444,6 @@ class Map : private internal::KeyMapBase<internal::KeyForBase<Key>> {
   struct Node : Base::KeyNode {
     using key_type = Key;
     using mapped_type = T;
-    static constexpr internal::MapNodeSizeInfoT size_info() {
-      return internal::MakeNodeInfo(sizeof(Node),
-                                    PROTOBUF_FIELD_OFFSET(Node, kv.second));
-    }
     value_type kv;
   };
 
@@ -1422,8 +1451,8 @@ class Map : private internal::KeyMapBase<internal::KeyForBase<Key>> {
     return internal::UntypedMapBase::TypeInfo{
         sizeof(Node),
         PROTOBUF_FIELD_OFFSET(Node, kv.second),
-        internal::UntypedMapBase::StaticTypeKind<Key>(),
-        internal::UntypedMapBase::StaticTypeKind<T>(),
+        static_cast<uint8_t>(internal::UntypedMapBase::StaticTypeKind<Key>()),
+        static_cast<uint8_t>(internal::UntypedMapBase::StaticTypeKind<T>()),
     };
   }
 
