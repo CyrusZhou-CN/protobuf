@@ -2745,6 +2745,9 @@ bool upb_inttable_replace(upb_inttable* t, uintptr_t key, upb_value val);
 // inserting more entries is legal, but will likely require a table resize.
 void upb_inttable_compact(upb_inttable* t, upb_Arena* a);
 
+// Clears the table.
+void upb_inttable_clear(upb_inttable* t);
+
 // Iteration over inttable:
 //
 //   intptr_t iter = UPB_INTTABLE_BEGIN;
@@ -2759,6 +2762,10 @@ void upb_inttable_compact(upb_inttable* t, upb_Arena* a);
 bool upb_inttable_next(const upb_inttable* t, uintptr_t* key, upb_value* val,
                        intptr_t* iter);
 void upb_inttable_removeiter(upb_inttable* t, intptr_t* iter);
+void upb_inttable_setentryvalue(upb_inttable* t, intptr_t iter, upb_value v);
+bool upb_inttable_done(const upb_inttable* t, intptr_t i);
+uintptr_t upb_inttable_iter_key(const upb_inttable* t, intptr_t iter);
+upb_value upb_inttable_iter_value(const upb_inttable* t, intptr_t iter);
 
 #ifdef __cplusplus
 } /* extern "C" */
@@ -3108,9 +3115,22 @@ UPB_API_INLINE const struct upb_MiniTable* upb_MiniTableExtension_GetSubMessage(
   return upb_MiniTableSub_Message(e->UPB_PRIVATE(sub));
 }
 
+UPB_API_INLINE const struct upb_MiniTableEnum*
+upb_MiniTableExtension_GetSubEnum(const struct upb_MiniTableExtension* e) {
+  if (upb_MiniTableExtension_CType(e) != kUpb_CType_Enum) {
+    return NULL;
+  }
+  return upb_MiniTableSub_Enum(e->UPB_PRIVATE(sub));
+}
+
 UPB_API_INLINE void upb_MiniTableExtension_SetSubMessage(
     struct upb_MiniTableExtension* e, const struct upb_MiniTable* m) {
   e->UPB_PRIVATE(sub).UPB_PRIVATE(submsg) = m;
+}
+
+UPB_API_INLINE void upb_MiniTableExtension_SetSubEnum(
+    struct upb_MiniTableExtension* e, const struct upb_MiniTableEnum* en) {
+  e->UPB_PRIVATE(sub).UPB_PRIVATE(subenum) = en;
 }
 
 UPB_INLINE upb_FieldRep UPB_PRIVATE(_upb_MiniTableExtension_GetRep)(
@@ -13112,8 +13132,8 @@ UPB_API const upb_EnumDef* upb_DefPool_FindEnumByName(const upb_DefPool* s,
 const upb_EnumValueDef* upb_DefPool_FindEnumByNameval(const upb_DefPool* s,
                                                       const char* sym);
 
-const upb_FileDef* upb_DefPool_FindFileByName(const upb_DefPool* s,
-                                              const char* name);
+UPB_API const upb_FileDef* upb_DefPool_FindFileByName(const upb_DefPool* s,
+                                                      const char* name);
 
 const upb_FileDef* upb_DefPool_FindFileByNameWithSize(const upb_DefPool* s,
                                                       const char* name,
