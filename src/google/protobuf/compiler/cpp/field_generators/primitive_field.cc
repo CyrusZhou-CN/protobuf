@@ -165,6 +165,17 @@ class SingularPrimitive final : public FieldGeneratorBase {
   void GenerateInlineAccessorDefinitions(io::Printer* p) const override;
   void GenerateSerializeWithCachedSizesToArray(io::Printer* p) const override;
   void GenerateByteSize(io::Printer* p) const override;
+#ifdef PROTOBUF_INTERNAL_V2_EXPERIMENT_PROTOC
+  void GenerateByteSizeV2(io::Printer* p) const override {
+    // |tag|1B| |field_number|4B| |payload...|
+    p->Emit({{"size", internal::v2::kSingularFieldTagSize +
+                          static_cast<size_t>(
+                              CppTypeToV2FieldSize(field_->cpp_type()))}},
+            R"cc(
+              total_size += $size$;
+            )cc");
+  }
+#endif  // PROTOBUF_INTERNAL_V2_EXPERIMENT_PROTOC
 
  private:
   const Options* opts_;
@@ -405,6 +416,16 @@ class RepeatedPrimitive final : public FieldGeneratorBase {
   void GenerateInlineAccessorDefinitions(io::Printer* p) const override;
   void GenerateSerializeWithCachedSizesToArray(io::Printer* p) const override;
   void GenerateByteSize(io::Printer* p) const override;
+#ifdef PROTOBUF_INTERNAL_V2_EXPERIMENT_PROTOC
+  void GenerateByteSizeV2(io::Printer* p) const override {
+    // |tag|1B| |field_number|4B| |count|4B| |length|4B| |payload|...
+    p->Emit(
+        R"cc(
+          total_size += ::_pbi::WireFormatLite::RepeatedNumericByteSizeV2(
+              this_._internal_$name$());
+        )cc");
+  }
+#endif  // PROTOBUF_INTERNAL_V2_EXPERIMENT_PROTOC
 
  private:
   bool HasCachedSize() const {

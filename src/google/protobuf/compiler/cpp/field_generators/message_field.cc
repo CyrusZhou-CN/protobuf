@@ -135,6 +135,16 @@ class SingularMessage : public FieldGeneratorBase {
       $field$ = $superclass$::CopyConstruct(arena, *from.$field$);
     )cc");
   }
+#ifdef PROTOBUF_INTERNAL_V2_EXPERIMENT_PROTOC
+  void GenerateByteSizeV2(io::Printer* p) const override {
+    // |tag|1B| |field_number|4B| |length|4B| |payload...|
+    p->Emit(
+        R"cc(
+          total_size += ::_pbi::WireFormatLite::LengthPrefixedByteSizeV2(
+              this_.$field_$->ByteSizeV2());
+        )cc");
+  }
+#endif  // PROTOBUF_INTERNAL_V2_EXPERIMENT_PROTOC
 
  private:
   friend class OneofMessage;
@@ -738,6 +748,16 @@ class RepeatedMessage : public FieldGeneratorBase {
   void GenerateByteSize(io::Printer* p) const override;
   void GenerateIsInitialized(io::Printer* p) const override;
   bool NeedsIsInitialized() const override;
+#ifdef PROTOBUF_INTERNAL_V2_EXPERIMENT_PROTOC
+  void GenerateByteSizeV2(io::Printer* p) const override {
+    // |tag|1B| |field_number|4B| |count|4B| |length|4B| |payload|...
+    p->Emit(
+        R"cc(
+          total_size += ::_pbi::WireFormatLite::RepeatedMessageByteSizeV2(
+              this_._internal$_weak$_$name$());
+        )cc");
+  }
+#endif  // PROTOBUF_INTERNAL_V2_EXPERIMENT_PROTOC
 
  private:
   const Options* opts_;

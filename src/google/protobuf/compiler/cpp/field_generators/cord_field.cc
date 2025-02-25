@@ -109,6 +109,15 @@ class CordFieldGenerator : public FieldGeneratorBase {
       $field$ = $pb$::Arena::Create<absl::Cord>(arena, *from.$field$);
     )cc");
   }
+#ifdef PROTOBUF_INTERNAL_V2_EXPERIMENT_PROTOC
+  void GenerateByteSizeV2(io::Printer* printer) const override {
+    // |tag|1B| |field_number|4B| |length|4B| |payload...|
+    printer->Emit(R"cc(
+      total_size += ::_pbi::WireFormatLite::LengthPrefixedByteSizeV2(
+          this_._internal_$name$().size());
+    )cc");
+  }
+#endif  // PROTOBUF_INTERNAL_V2_EXPERIMENT_PROTOC
 };
 
 class CordOneofFieldGenerator : public CordFieldGenerator {
