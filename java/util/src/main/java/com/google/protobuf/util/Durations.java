@@ -20,6 +20,7 @@ import static com.google.protobuf.util.Timestamps.NANOS_PER_MILLISECOND;
 import static com.google.protobuf.util.Timestamps.NANOS_PER_SECOND;
 
 import com.google.common.annotations.GwtIncompatible;
+import com.google.common.annotations.J2ktIncompatible;
 import com.google.common.base.Strings;
 import com.google.errorprone.annotations.CanIgnoreReturnValue;
 import com.google.errorprone.annotations.CompileTimeConstant;
@@ -145,6 +146,7 @@ public final class Durations {
   @CanIgnoreReturnValue
   @GwtIncompatible("Depends on String.format which is not supported in Xplat.")
   @J2ObjCIncompatible
+  @J2ktIncompatible
   public static Duration checkNotNegative(Duration duration) {
     checkArgument(!isNegative(duration), "duration (%s) must not be negative", toString(duration));
     return duration;
@@ -159,6 +161,7 @@ public final class Durations {
   @CanIgnoreReturnValue
   @GwtIncompatible("Depends on String.format which is not supported in Xplat.")
   @J2ObjCIncompatible
+  @J2ktIncompatible
   public static Duration checkPositive(Duration duration) {
     checkArgument(isPositive(duration), "duration (%s) must be positive", toString(duration));
     return duration;
@@ -202,6 +205,7 @@ public final class Durations {
    */
   @GwtIncompatible("Depends on String.format which is not supported in Xplat.")
   @J2ObjCIncompatible
+  @J2ktIncompatible
   public static String toString(Duration duration) {
     checkValid(duration);
 
@@ -231,6 +235,7 @@ public final class Durations {
    */
   @GwtIncompatible("ParseException is not supported in Xplat")
   @J2ObjCIncompatible
+  @J2ktIncompatible
   public static Duration parse(String value) throws ParseException {
     // Must end with "s".
     if (value.isEmpty() || value.charAt(value.length() - 1) != 's') {
@@ -282,6 +287,7 @@ public final class Durations {
    */
   @GwtIncompatible("ParseException is not supported in Xplat")
   @J2ObjCIncompatible
+  @J2ktIncompatible
   public static Duration parseUnchecked(@CompileTimeConstant String value) {
     try {
       return parse(value);
