@@ -21,6 +21,9 @@
 #include "google/protobuf/unittest.pb.h"
 #include "google/protobuf/unittest_no_field_presence.pb.h"
 
+// Must be included last
+#include "google/protobuf/port_def.inc"
+
 namespace google {
 namespace protobuf {
 namespace {
@@ -126,9 +129,20 @@ TEST(NoFieldPresenceTest, GenCodeMapReflectionMissingKeyDeathTest) {
 
   const FieldDescriptor* field_map_int32_bytes =
       desc->FindFieldByName("map_int32_bytes");
+
+#ifdef NDEBUG
+#ifdef PROTOBUF_HAVE_ADDRESS_SANITIZER
+  // In opt ASAN and UBSAN mode, this call will fail due to UB.
+  EXPECT_DEATH(r->GetRepeatedMessage(message, field_map_int32_bytes, 0), "");
+#else
+  // This is technically UB in optimized mode.
+  r->GetRepeatedMessage(message, field_map_int32_bytes, 0);
+#endif
+#else
   // Trying to get an unset map entry would crash in debug mode.
   EXPECT_DEBUG_DEATH(r->GetRepeatedMessage(message, field_map_int32_bytes, 0),
                      "index < current_size_");
+#endif
 }
 
 TEST(NoFieldPresenceTest, ReflectionEmptyMapTest) {
@@ -1101,3 +1115,5 @@ TYPED_TEST(NoFieldPresenceMapSerializeTest,
 }  // namespace
 }  // namespace protobuf
 }  // namespace google
+
+#include "google/protobuf/port_undef.inc"

@@ -248,6 +248,14 @@ static_assert(PROTOBUF_ABSL_MIN(20230125, 3),
 #endif
 #define PROTOBUF_CC
 
+#ifndef PROTOBUF_HAVE_ADDRESS_SANITIZER
+#if defined(ABSL_HAVE_ADDRESS_SANITIZER) || \
+    defined(ABSL_HAVE_HWADDRESS_SANITIZER)
+#define PROTOBUF_HAVE_ADDRESS_SANITIZER 1
+#else
+#endif
+#endif
+
 #if defined(__clang__)
 #define PROTOBUF_IGNORE_DEPRECATION_START                     \
   _Pragma("clang diagnostic push")                                  \
