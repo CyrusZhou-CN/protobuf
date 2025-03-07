@@ -12053,6 +12053,49 @@ TEST_F(DescriptorPoolFeaturesTest, OverrideDefaults) {
               )pb"));
 }
 
+TEST_F(DescriptorPoolFeaturesTest, OverrideFieldDefaults) {
+  FeatureSetDefaults defaults = ParseTextOrDie(R"pb(
+    defaults {
+      edition: EDITION_PROTO2
+      overridable_features {
+        field_presence: EXPLICIT
+        enum_type: CLOSED
+        repeated_field_encoding: EXPANDED
+        utf8_validation: VERIFY
+        message_encoding: LENGTH_PREFIXED
+        json_format: ALLOW
+        enforce_naming_style: STYLE_LEGACY
+      }
+    }
+    minimum_edition: EDITION_PROTO2
+    maximum_edition: EDITION_2023
+  )pb");
+  EXPECT_OK(pool_.SetFeatureSetDefaults(std::move(defaults)));
+
+  FileDescriptorProto file_proto = ParseTextOrDie(R"pb(
+    name: "foo.proto"
+    syntax: "editions"
+    edition: EDITION_PROTO3
+    message_type {
+      name: "Foo"
+      field { name: "bar" number: 1 label: LABEL_OPTIONAL type: TYPE_INT64 }
+    }
+  )pb");
+
+  BuildDescriptorMessagesInTestPool();
+  const FileDescriptor* file = ABSL_DIE_IF_NULL(pool_.BuildFile(file_proto));
+  const FieldDescriptor* field = file->message_type(0)->field(0);
+  EXPECT_THAT(GetFeatures(field), EqualsProto(R"pb(
+                field_presence: EXPLICIT
+                enum_type: CLOSED
+                repeated_field_encoding: EXPANDED
+                utf8_validation: VERIFY
+                message_encoding: LENGTH_PREFIXED
+                json_format: ALLOW
+                enforce_naming_style: STYLE_LEGACY
+              )pb"));
+}
+
 TEST_F(DescriptorPoolFeaturesTest, ResolvesFeaturesForCppDefault) {
   EXPECT_FALSE(pool_.ResolvesFeaturesFor(pb::test));
   EXPECT_FALSE(pool_.ResolvesFeaturesFor(pb::TestMessage::test_message));
@@ -12129,6 +12172,27 @@ TEST_F(DescriptorPoolMemoizationTest, MemoizeProjectionMultithreaded) {
       }
       ASSERT_EQ(first_name, "proto2_unittest.TestAllTypes.optional_int32");
     });
+  }
+  for (auto& thread : threads) {
+    thread.join();
+  }
+}
+
+TEST_F(DescriptorPoolMemoizationTest, MemoizeProjectionInsertionRace) {
+  auto name_lambda = [](const FieldDescriptor* field) {
+    return field->full_name();
+  };
+  proto2_unittest::TestAllTypes message;
+  const Descriptor* descriptor = message.GetDescriptor();
+  std::vector<std::thread> threads;
+  for (int i = 0; i < descriptor->field_count(); ++i) {
+    for (int j = 0; j < 3; ++j) {
+      threads.emplace_back([this, name_lambda, descriptor, i]() {
+        auto name = DescriptorPoolMemoizationTest::MemoizeProjection(
+            descriptor->file()->pool(), descriptor->field(i), name_lambda);
+        ASSERT_THAT(name, HasSubstr("proto2_unittest.TestAllTypes"));
+      });
+    }
   }
   for (auto& thread : threads) {
     thread.join();
@@ -12875,7 +12939,7 @@ class DatabaseBackedPoolTest : public testing::Test {
     ~ErrorDescriptorDatabase() override = default;
 
     // implements DescriptorDatabase ---------------------------------
-    bool FindFileByName(const std::string& filename,
+    bool FindFileByName(StringViewArg filename,
                         FileDescriptorProto* output) override {
       // error.proto and error2.proto cyclically import each other.
       if (filename == "error.proto") {
@@ -12892,11 +12956,11 @@ class DatabaseBackedPoolTest : public testing::Test {
         return false;
       }
     }
-    bool FindFileContainingSymbol(const std::string& symbol_name,
+    bool FindFileContainingSymbol(StringViewArg symbol_name,
                                   FileDescriptorProto* output) override {
       return false;
     }
-    bool FindFileContainingExtension(const std::string& containing_type,
+    bool FindFileContainingExtension(StringViewArg containing_type,
                                      int field_number,
                                      FileDescriptorProto* output) override {
       return false;
@@ -12920,17 +12984,17 @@ class DatabaseBackedPoolTest : public testing::Test {
     void Clear() { call_count_ = 0; }
 
     // implements DescriptorDatabase ---------------------------------
-    bool FindFileByName(const std::string& filename,
+    bool FindFileByName(StringViewArg filename,
                         FileDescriptorProto* output) override {
       ++call_count_;
       return wrapped_db_->FindFileByName(filename, output);
     }
-    bool FindFileContainingSymbol(const std::string& symbol_name,
+    bool FindFileContainingSymbol(StringViewArg symbol_name,
                                   FileDescriptorProto* output) override {
       ++call_count_;
       return wrapped_db_->FindFileContainingSymbol(symbol_name, output);
     }
-    bool FindFileContainingExtension(const std::string& containing_type,
+    bool FindFileContainingExtension(StringViewArg containing_type,
                                      int field_number,
                                      FileDescriptorProto* output) override {
       ++call_count_;
@@ -12951,15 +13015,15 @@ class DatabaseBackedPoolTest : public testing::Test {
     DescriptorDatabase* wrapped_db_;
 
     // implements DescriptorDatabase ---------------------------------
-    bool FindFileByName(const std::string& filename,
+    bool FindFileByName(StringViewArg filename,
                         FileDescriptorProto* output) override {
       return wrapped_db_->FindFileByName(filename, output);
     }
-    bool FindFileContainingSymbol(const std::string& symbol_name,
+    bool FindFileContainingSymbol(StringViewArg symbol_name,
                                   FileDescriptorProto* output) override {
       return FindFileByName("foo.proto", output);
     }
-    bool FindFileContainingExtension(const std::string& containing_type,
+    bool FindFileContainingExtension(StringViewArg containing_type,
                                      int field_number,
                                      FileDescriptorProto* output) override {
       return FindFileByName("foo.proto", output);
@@ -13400,7 +13464,7 @@ class ExponentialErrorDatabase : public DescriptorDatabase {
   ~ExponentialErrorDatabase() override = default;
 
   // implements DescriptorDatabase ---------------------------------
-  bool FindFileByName(const std::string& filename,
+  bool FindFileByName(StringViewArg filename,
                       FileDescriptorProto* output) override {
     int file_num = -1;
     FullMatch(filename, "file", ".proto", &file_num);
@@ -13410,7 +13474,7 @@ class ExponentialErrorDatabase : public DescriptorDatabase {
       return false;
     }
   }
-  bool FindFileContainingSymbol(const std::string& symbol_name,
+  bool FindFileContainingSymbol(StringViewArg symbol_name,
                                 FileDescriptorProto* output) override {
     int file_num = -1;
     FullMatch(symbol_name, "Message", "", &file_num);
@@ -13420,7 +13484,7 @@ class ExponentialErrorDatabase : public DescriptorDatabase {
       return false;
     }
   }
-  bool FindFileContainingExtension(const std::string& containing_type,
+  bool FindFileContainingExtension(StringViewArg containing_type,
                                    int field_number,
                                    FileDescriptorProto* output) override {
     return false;

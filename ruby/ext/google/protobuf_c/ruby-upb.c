@@ -3973,21 +3973,36 @@ bool upb_Map_Delete(upb_Map* map, upb_MessageValue key, upb_MessageValue* val) {
 
 bool upb_Map_Next(const upb_Map* map, upb_MessageValue* key,
                   upb_MessageValue* val, size_t* iter) {
-  upb_StringView k;
   upb_value v;
-  const bool ok = upb_strtable_next2(&map->t.strtable, &k, &v, (intptr_t*)iter);
-  if (ok) {
-    _upb_map_fromkey(k, key, map->key_size);
+  bool ret;
+  if (map->UPB_PRIVATE(is_strtable)) {
+    upb_StringView strkey;
+    ret = upb_strtable_next2(&map->t.strtable, &strkey, &v, (intptr_t*)iter);
+    if (ret) {
+      _upb_map_fromkey(strkey, key, map->key_size);
+    }
+  } else {
+    uintptr_t intkey;
+    ret = upb_inttable_next(&map->t.inttable, &intkey, &v, (intptr_t*)iter);
+    if (ret) {
+      memcpy(key, &intkey, map->key_size);
+    }
+  }
+  if (ret) {
     _upb_map_fromvalue(v, val, map->val_size);
   }
-  return ok;
+  return ret;
 }
 
 UPB_API void upb_Map_SetEntryValue(upb_Map* map, size_t iter,
                                    upb_MessageValue val) {
   upb_value v;
   _upb_map_tovalue(&val, map->val_size, &v, NULL);
-  upb_strtable_setentryvalue(&map->t.strtable, iter, v);
+  if (map->UPB_PRIVATE(is_strtable)) {
+    upb_strtable_setentryvalue(&map->t.strtable, iter, v);
+  } else {
+    upb_inttable_setentryvalue(&map->t.inttable, iter, v);
+  }
 }
 
 bool upb_MapIterator_Next(const upb_Map* map, size_t* iter) {
@@ -3995,29 +4010,45 @@ bool upb_MapIterator_Next(const upb_Map* map, size_t* iter) {
 }
 
 bool upb_MapIterator_Done(const upb_Map* map, size_t iter) {
-  upb_strtable_iter i;
   UPB_ASSERT(iter != kUpb_Map_Begin);
-  i.t = &map->t.strtable;
-  i.index = iter;
-  return upb_strtable_done(&i);
+  if (map->UPB_PRIVATE(is_strtable)) {
+    upb_strtable_iter i;
+    i.t = &map->t.strtable;
+    i.index = iter;
+    return upb_strtable_done(&i);
+  } else {
+    return upb_inttable_done(&map->t.inttable, iter);
+  }
 }
 
 // Returns the key and value for this entry of the map.
 upb_MessageValue upb_MapIterator_Key(const upb_Map* map, size_t iter) {
-  upb_strtable_iter i;
   upb_MessageValue ret;
-  i.t = &map->t.strtable;
-  i.index = iter;
-  _upb_map_fromkey(upb_strtable_iter_key(&i), &ret, map->key_size);
+  if (map->UPB_PRIVATE(is_strtable)) {
+    upb_strtable_iter i;
+    i.t = &map->t.strtable;
+    i.index = iter;
+    _upb_map_fromkey(upb_strtable_iter_key(&i), &ret, map->key_size);
+  } else {
+    uintptr_t intkey = upb_inttable_iter_key(&map->t.inttable, iter);
+    memcpy(&ret, &intkey, map->key_size);
+  }
   return ret;
 }
 
 upb_MessageValue upb_MapIterator_Value(const upb_Map* map, size_t iter) {
-  upb_strtable_iter i;
+  upb_value v;
+  if (map->UPB_PRIVATE(is_strtable)) {
+    upb_strtable_iter i;
+    i.t = &map->t.strtable;
+    i.index = iter;
+    v = upb_strtable_iter_value(&i);
+  } else {
+    v = upb_inttable_iter_value(&map->t.inttable, iter);
+  }
+
   upb_MessageValue ret;
-  i.t = &map->t.strtable;
-  i.index = iter;
-  _upb_map_fromvalue(upb_strtable_iter_value(&i), &ret, map->val_size);
+  _upb_map_fromvalue(v, &ret, map->val_size);
   return ret;
 }
 
@@ -4041,7 +4072,10 @@ upb_Map* _upb_Map_New(upb_Arena* a, size_t key_size, size_t value_size) {
   upb_Map* map = upb_Arena_Malloc(a, sizeof(upb_Map));
   if (!map) return NULL;
 
-  upb_strtable_init(&map->t.strtable, 4, a);
+  // TODO: Actually use the inttable after we fix sorting.
+  if (!upb_strtable_init(&map->t.strtable, 4, a)) {
+    return NULL;
+  }
   map->key_size = key_size;
   map->val_size = value_size;
   map->UPB_PRIVATE(is_frozen) = false;
@@ -4156,8 +4190,17 @@ bool _upb_mapsorter_pushmap(_upb_mapsorter* s, upb_FieldType key_type,
 
   // Copy non-empty entries from the table to s->entries.
   const void** dst = &s->entries[sorted->start];
-  const upb_tabent* src = map->t.strtable.t.entries;
-  const upb_tabent* end = src + upb_table_size(&map->t.strtable.t);
+  const upb_tabent* src;
+  const upb_tabent* end;
+  if (map->UPB_PRIVATE(is_strtable)) {
+    src = map->t.strtable.t.entries;
+    end = src + upb_table_size(&map->t.strtable.t);
+  } else {
+    // For the inttable, only sort the table entries, since the array part is
+    // already in a sorted order.
+    src = map->t.inttable.t.entries;
+    end = src + upb_table_size(&map->t.inttable.t);
+  }
   for (; src < end; src++) {
     if (!upb_tabent_isempty(src)) {
       *dst = src;
@@ -4219,6 +4262,43 @@ bool UPB_PRIVATE(_upb_Message_AddUnknown)(upb_Message* msg, const char* data,
                                           size_t len, upb_Arena* arena,
                                           bool alias) {
   UPB_ASSERT(!upb_Message_IsFrozen(msg));
+  {
+    upb_Message_Internal* in = UPB_PRIVATE(_upb_Message_GetInternal)(msg);
+    if (in && in->size) {
+      upb_TaggedAuxPtr ptr = in->aux_data[in->size - 1];
+      if (upb_TaggedAuxPtr_IsUnknown(ptr)) {
+        upb_StringView* existing = upb_TaggedAuxPtr_UnknownData(ptr);
+        bool was_aliased = upb_TaggedAuxPtr_IsUnknownAliased(ptr);
+        if (alias) {
+          // Fast path if the field we're adding is immediately after the last
+          // added unknown field.
+          if (was_aliased && existing->data + existing->size == data) {
+            existing->size += len;
+            return true;
+          }
+        } else if (!was_aliased) {
+          // If part of the existing field was deleted at the beginning, we can
+          // reconstruct it by comparing the address of the end with the address
+          // of the entry itself; having the non-aliased tag means that the
+          // string_view and the data it points to are part of the same original
+          // upb_Arena_Malloc allocation, and the end of the string view
+          // represents the end of that allocation.
+          size_t prev_alloc_size =
+              (existing->data + existing->size) - (char*)existing;
+          if (SIZE_MAX - prev_alloc_size >= len) {
+            size_t new_alloc_size = prev_alloc_size + len;
+            if (upb_Arena_TryExtend(arena, existing, prev_alloc_size,
+                                    new_alloc_size)) {
+              memcpy(UPB_PTR_AT(existing, prev_alloc_size, void), data, len);
+              existing->size += len;
+              return true;
+            }
+          }
+        }
+      }
+    }
+  }
+
   // TODO: b/376969853  - Add debug check that the unknown field is an overall
   // valid proto field
   if (!UPB_PRIVATE(_upb_Message_ReserveSlot)(msg, arena)) {
@@ -4238,7 +4318,9 @@ bool UPB_PRIVATE(_upb_Message_AddUnknown)(upb_Message* msg, const char* data,
   }
   view->size = len;
   upb_Message_Internal* in = UPB_PRIVATE(_upb_Message_GetInternal)(msg);
-  in->aux_data[in->size++] = upb_TaggedAuxPtr_MakeUnknownData(view);
+  in->aux_data[in->size++] = alias
+                                 ? upb_TaggedAuxPtr_MakeUnknownDataAliased(view)
+                                 : upb_TaggedAuxPtr_MakeUnknownData(view);
   return true;
 }
 
@@ -4250,8 +4332,40 @@ bool UPB_PRIVATE(_upb_Message_AddUnknownV)(struct upb_Message* msg,
   UPB_ASSERT(count > 0);
   size_t total_len = 0;
   for (size_t i = 0; i < count; i++) {
+    if (SIZE_MAX - total_len < data[i].size) {
+      return false;
+    }
     total_len += data[i].size;
   }
+
+  {
+    upb_Message_Internal* in = UPB_PRIVATE(_upb_Message_GetInternal)(msg);
+    if (in && in->size) {
+      upb_TaggedAuxPtr ptr = in->aux_data[in->size - 1];
+      if (upb_TaggedAuxPtr_IsUnknown(ptr)) {
+        upb_StringView* existing = upb_TaggedAuxPtr_UnknownData(ptr);
+        if (!upb_TaggedAuxPtr_IsUnknownAliased(ptr)) {
+          size_t prev_alloc_size =
+              (existing->data + existing->size) - (char*)existing;
+          if (SIZE_MAX - prev_alloc_size >= total_len) {
+            size_t new_alloc_size = prev_alloc_size + total_len;
+            if (upb_Arena_TryExtend(arena, existing, prev_alloc_size,
+                                    new_alloc_size)) {
+              char* copy = UPB_PTR_AT(existing, prev_alloc_size, char);
+              for (size_t i = 0; i < count; i++) {
+                memcpy(copy, data[i].data, data[i].size);
+                copy += data[i].size;
+              }
+              existing->size += total_len;
+              return true;
+            }
+          }
+        }
+      }
+    }
+  }
+
+  if (SIZE_MAX - sizeof(upb_StringView) < total_len) return false;
   if (!UPB_PRIVATE(_upb_Message_ReserveSlot)(msg, arena)) return false;
 
   upb_StringView* view =
@@ -4285,23 +4399,64 @@ void _upb_Message_DiscardUnknown_shallow(upb_Message* msg) {
   in->size = size;
 }
 
-bool upb_Message_DeleteUnknown(upb_Message* msg, upb_StringView* data,
-                               uintptr_t* iter) {
+upb_Message_DeleteUnknownStatus upb_Message_DeleteUnknown(upb_Message* msg,
+                                                          upb_StringView* data,
+                                                          uintptr_t* iter,
+                                                          upb_Arena* arena) {
   UPB_ASSERT(!upb_Message_IsFrozen(msg));
   UPB_ASSERT(*iter != kUpb_Message_UnknownBegin);
   upb_Message_Internal* in = UPB_PRIVATE(_upb_Message_GetInternal)(msg);
   UPB_ASSERT(in);
   UPB_ASSERT(*iter <= in->size);
-#ifndef NDEBUG
   upb_TaggedAuxPtr unknown_ptr = in->aux_data[*iter - 1];
   UPB_ASSERT(upb_TaggedAuxPtr_IsUnknown(unknown_ptr));
   upb_StringView* unknown = upb_TaggedAuxPtr_UnknownData(unknown_ptr);
-  UPB_ASSERT(unknown->data == data->data);
-  UPB_ASSERT(unknown->size == data->size);
-#endif
-  in->aux_data[*iter - 1] = upb_TaggedAuxPtr_Null();
-
-  return upb_Message_NextUnknown(msg, data, iter);
+  if (unknown->data == data->data && unknown->size == data->size) {
+    // Remove whole field
+    in->aux_data[*iter - 1] = upb_TaggedAuxPtr_Null();
+  } else if (unknown->data == data->data) {
+    // Strip prefix
+    unknown->data += data->size;
+    unknown->size -= data->size;
+    *data = *unknown;
+    return kUpb_DeleteUnknown_IterUpdated;
+  } else if (unknown->data + unknown->size == data->data + data->size) {
+    // Truncate existing field
+    unknown->size -= data->size;
+    if (!upb_TaggedAuxPtr_IsUnknownAliased(unknown_ptr)) {
+      in->aux_data[*iter - 1] =
+          upb_TaggedAuxPtr_MakeUnknownDataAliased(unknown);
+    }
+  } else {
+    UPB_ASSERT(unknown->data < data->data &&
+               unknown->data + unknown->size > data->data + data->size);
+    // Split in the middle
+    upb_StringView* prefix = unknown;
+    upb_StringView* suffix = upb_Arena_Malloc(arena, sizeof(upb_StringView));
+    if (!suffix) {
+      return kUpb_DeleteUnknown_AllocFail;
+    }
+    if (!UPB_PRIVATE(_upb_Message_ReserveSlot)(msg, arena)) {
+      return kUpb_DeleteUnknown_AllocFail;
+    }
+    in = UPB_PRIVATE(_upb_Message_GetInternal)(msg);
+    if (*iter != in->size) {
+      // Shift later entries down so that unknown field ordering is preserved
+      memmove(&in->aux_data[*iter + 1], &in->aux_data[*iter],
+              sizeof(upb_TaggedAuxPtr) * (in->size - *iter));
+    }
+    in->aux_data[*iter] = upb_TaggedAuxPtr_MakeUnknownDataAliased(suffix);
+    if (!upb_TaggedAuxPtr_IsUnknownAliased(unknown_ptr)) {
+      in->aux_data[*iter - 1] = upb_TaggedAuxPtr_MakeUnknownDataAliased(prefix);
+    }
+    in->size++;
+    suffix->data = data->data + data->size;
+    suffix->size = (prefix->data + prefix->size) - suffix->data;
+    prefix->size = data->data - prefix->data;
+  }
+  return upb_Message_NextUnknown(msg, data, iter)
+             ? kUpb_DeleteUnknown_IterUpdated
+             : kUpb_DeleteUnknown_DeletedLast;
 }
 
 size_t upb_Message_ExtensionCount(const upb_Message* msg) {
@@ -8109,7 +8264,8 @@ UPB_NORETURN static void encode_err(upb_encstate* e, upb_EncodeStatus s) {
 UPB_NOINLINE
 static void encode_growbuffer(upb_encstate* e, size_t bytes) {
   size_t old_size = e->limit - e->buf;
-  size_t new_size = upb_roundup_pow2(bytes + (e->limit - e->ptr));
+  size_t needed_size = bytes + (e->limit - e->ptr);
+  size_t new_size = upb_roundup_pow2(needed_size);
   char* new_buf = upb_Arena_Realloc(e->arena, e->buf, old_size, new_size);
 
   if (!new_buf) encode_err(e, kUpb_EncodeStatus_OutOfMemory);
@@ -8118,14 +8274,12 @@ static void encode_growbuffer(upb_encstate* e, size_t bytes) {
   // TODO: This is somewhat inefficient since we are copying twice.
   // Maybe create a realloc() that copies to the end of the new buffer?
   if (old_size > 0) {
-    memmove(new_buf + new_size - old_size, e->buf, old_size);
+    memmove(new_buf + new_size - old_size, new_buf, old_size);
   }
 
-  e->ptr = new_buf + new_size - (e->limit - e->ptr);
-  e->limit = new_buf + new_size;
   e->buf = new_buf;
-
-  e->ptr -= bytes;
+  e->limit = new_buf + new_size;
+  e->ptr = new_buf + new_size - needed_size;
 }
 
 /* Call to ensure that at least "bytes" bytes are available for writing at
@@ -8465,14 +8619,25 @@ static void encode_map(upb_encstate* e, const upb_Message* msg,
     }
     _upb_mapsorter_popmap(&e->sorter, &sorted);
   } else {
-    intptr_t iter = UPB_STRTABLE_BEGIN;
-    upb_StringView key;
     upb_value val;
-    while (upb_strtable_next2(&map->t.strtable, &key, &val, &iter)) {
-      upb_MapEntry ent;
-      _upb_map_fromkey(key, &ent.k, map->key_size);
-      _upb_map_fromvalue(val, &ent.v, map->val_size);
-      encode_mapentry(e, upb_MiniTableField_Number(f), layout, &ent);
+    if (map->UPB_PRIVATE(is_strtable)) {
+      intptr_t iter = UPB_STRTABLE_BEGIN;
+      upb_StringView strkey;
+      while (upb_strtable_next2(&map->t.strtable, &strkey, &val, &iter)) {
+        upb_MapEntry ent;
+        _upb_map_fromkey(strkey, &ent.k, map->key_size);
+        _upb_map_fromvalue(val, &ent.v, map->val_size);
+        encode_mapentry(e, upb_MiniTableField_Number(f), layout, &ent);
+      }
+    } else {
+      intptr_t iter = UPB_INTTABLE_BEGIN;
+      uintptr_t intkey = 0;
+      while (upb_inttable_next(&map->t.inttable, &intkey, &val, &iter)) {
+        upb_MapEntry ent;
+        memcpy(&ent.k, &intkey, map->key_size);
+        _upb_map_fromvalue(val, &ent.v, map->val_size);
+        encode_mapentry(e, upb_MiniTableField_Number(f), layout, &ent);
+      }
     }
   }
 }
@@ -11177,6 +11342,7 @@ const upb_MiniTableFile google_protobuf_descriptor_proto_upb_file_layout = {
  * Implementation is heavily inspired by Lua's ltable.c.
  */
 
+#include <stdint.h>
 #include <string.h>
 
 
@@ -11238,7 +11404,14 @@ typedef bool eqlfunc_t(upb_tabkey k1, lookupkey_t k2);
 
 /* Base table (shared code) ***************************************************/
 
-static uint32_t upb_inthash(uintptr_t key) { return (uint32_t)key; }
+static uint32_t upb_inthash(uintptr_t key) {
+  if (sizeof(uintptr_t) == 8) {
+    return (uint32_t)key ^ (uint32_t)(key >> 32);
+  } else {
+    UPB_ASSERT(sizeof(uintptr_t) == 4);
+    return (uint32_t)key;
+  }
+}
 
 static const upb_tabent* upb_getentry(const upb_table* t, uint32_t hash) {
   return t->entries + (hash & t->mask);
@@ -12283,17 +12456,6 @@ upb_Extension* UPB_PRIVATE(_upb_Message_GetOrCreateExtension)(
   return ext;
 }
 
-void upb_Message_ReplaceUnknownWithExtension(struct upb_Message* msg,
-                                             uintptr_t iter,
-                                             const upb_Extension* ext) {
-  UPB_ASSERT(iter != 0);
-  upb_Message_Internal* in = UPB_PRIVATE(_upb_Message_GetInternal)(msg);
-  UPB_ASSERT(in);
-  size_t index = iter - 1;
-  upb_TaggedAuxPtr tagged_ptr = in->aux_data[index];
-  UPB_ASSERT(upb_TaggedAuxPtr_IsUnknown(tagged_ptr));
-  in->aux_data[index] = upb_TaggedAuxPtr_MakeExtension(ext);
-}
 
 #include <math.h>
 #include <stddef.h>
