@@ -67,6 +67,10 @@ Error, UINTPTR_MAX is undefined
 #define UPB_SIZEOF_FLEX(type, member, count) \
   UPB_MAX(sizeof(type), offsetof(type, member[count]))
 
+#define UPB_SIZEOF_FLEX_WOULD_OVERFLOW(type, member, count) \
+  (((SIZE_MAX - offsetof(type, member[0])) /                \
+    (offsetof(type, member[1]) - offsetof(type, member[0]))) < (size_t)count)
+
 #define UPB_MAPTYPE_STRING 0
 
 // UPB_EXPORT: always generate a public symbol.
@@ -2973,7 +2977,9 @@ void upb_Arena_SetMaxBlockSize(size_t max) {
 
 typedef struct upb_MemBlock {
   struct upb_MemBlock* next;
-  size_t size;
+  // If this block is the head of the list, tracks a growing hint of what the
+  // *next* block should be; otherwise tracks the size of the actual allocation.
+  size_t size_or_hint;
   // Data follows.
 } upb_MemBlock;
 
@@ -3031,6 +3037,12 @@ static const size_t kUpb_MemblockReserve =
 // Extracts the (upb_ArenaInternal*) from a (upb_Arena*)
 static upb_ArenaInternal* upb_Arena_Internal(const upb_Arena* a) {
   return &((upb_ArenaState*)a)->body;
+}
+
+// Extracts the (upb_Arena*) from a (upb_ArenaInternal*)
+static upb_Arena* upb_Arena_FromInternal(const upb_ArenaInternal* ai) {
+  ptrdiff_t offset = -offsetof(upb_ArenaState, body);
+  return UPB_PTR_AT(ai, offset, upb_Arena);
 }
 
 static bool _upb_Arena_IsTaggedRefcount(uintptr_t parent_or_count) {
@@ -3227,31 +3239,39 @@ uint32_t upb_Arena_DebugRefCount(const upb_Arena* a) {
   return (uint32_t)_upb_Arena_RefCountFromTagged(tagged);
 }
 
+// Adds an allocated block to the head of the list.
 static void _upb_Arena_AddBlock(upb_Arena* a, void* ptr, size_t offset,
                                 size_t block_size) {
   upb_ArenaInternal* ai = upb_Arena_Internal(a);
   upb_MemBlock* block = ptr;
 
-  block->size = block_size;
-  // Insert into linked list.
-  block->next = ai->blocks;
-  ai->blocks = block;
-
+  block->size_or_hint = block_size;
   UPB_ASSERT(offset >= kUpb_MemblockReserve);
-  a->UPB_PRIVATE(ptr) = UPB_PTR_AT(block, offset, char);
+  char* start = UPB_PTR_AT(block, offset, char);
+  upb_MemBlock* head = ai->blocks;
+  if (head && head->next) {
+    // Fix up size to match actual allocation size
+    head->size_or_hint = a->UPB_PRIVATE(end) - (char*)head;
+  }
+  block->next = head;
+  ai->blocks = block;
+  a->UPB_PRIVATE(ptr) = start;
   a->UPB_PRIVATE(end) = UPB_PTR_AT(block, block_size, char);
-
-  UPB_POISON_MEMORY_REGION(a->UPB_PRIVATE(ptr),
-                           a->UPB_PRIVATE(end) - a->UPB_PRIVATE(ptr));
+  UPB_POISON_MEMORY_REGION(start, a->UPB_PRIVATE(end) - start);
+  UPB_ASSERT(UPB_PRIVATE(_upb_ArenaHas)(a) >= block_size - offset);
 }
 
-static bool _upb_Arena_AllocBlock(upb_Arena* a, size_t size) {
+// Fulfills the allocation request by allocating a new block. Returns NULL on
+// allocation failure.
+void* UPB_PRIVATE(_upb_Arena_SlowMalloc)(upb_Arena* a, size_t size) {
   upb_ArenaInternal* ai = upb_Arena_Internal(a);
-  if (!ai->block_alloc) return false;
+  if (!ai->block_alloc) return NULL;
   size_t last_size = 128;
+  size_t current_free = 0;
   upb_MemBlock* last_block = ai->blocks;
   if (last_block) {
     last_size = a->UPB_PRIVATE(end) - (char*)last_block;
+    current_free = a->UPB_PRIVATE(end) - a->UPB_PRIVATE(ptr);
   }
 
   // Relaxed order is safe here as we don't need any ordering with the setter.
@@ -3259,17 +3279,45 @@ static bool _upb_Arena_AllocBlock(upb_Arena* a, size_t size) {
       upb_Atomic_Load(&g_max_block_size, memory_order_relaxed);
 
   // Don't naturally grow beyond the max block size.
-  size_t clamped_size = UPB_MIN(last_size * 2, max_block_size);
-
+  size_t target_size = UPB_MIN(last_size * 2, max_block_size);
+  size_t future_free = UPB_MAX(size, target_size - kUpb_MemblockReserve) - size;
+  // We want to preserve exponential growth in block size without wasting too
+  // much unused space at the end of blocks. Once the head of our blocks list is
+  // large enough to always trigger a max-sized block for all subsequent
+  // allocations, allocate blocks that would net reduce free space behind it.
+  if (last_block && current_free > future_free &&
+      target_size < max_block_size) {
+    last_size = last_block->size_or_hint;
+    // Recalculate sizes with possibly larger last_size
+    target_size = UPB_MIN(last_size * 2, max_block_size);
+    future_free = UPB_MAX(size, target_size - kUpb_MemblockReserve) - size;
+  }
+  bool insert_after_head = false;
+  // Only insert after head if an allocated block is present; we don't want to
+  // continue allocating out of the initial block because we'll have no way of
+  // restoring the size of our allocated block if we add another.
+  if (last_block && current_free >= future_free) {
+    // If we're still going to net reduce free space with this new block, then
+    // only allocate the precise size requested and keep the current last block
+    // as the active block for future allocations.
+    insert_after_head = true;
+    target_size = size + kUpb_MemblockReserve;
+    // Add something to our previous size each time, so that eventually we
+    // will reach the max block size. Allocations larger than the max block size
+    // will always get their own backing allocation, so don't include them.
+    if (target_size <= max_block_size) {
+      last_block->size_or_hint =
+          UPB_MIN(last_block->size_or_hint + (size >> 1), max_block_size >> 1);
+    }
+  }
   // We may need to exceed the max block size if the user requested a large
   // allocation.
-  size_t block_size = UPB_MAX(kUpb_MemblockReserve + size, clamped_size);
+  size_t block_size = UPB_MAX(kUpb_MemblockReserve + size, target_size);
 
   upb_MemBlock* block =
       upb_malloc(_upb_ArenaInternal_BlockAlloc(ai), block_size);
 
-  if (!block) return false;
-  _upb_Arena_AddBlock(a, block, kUpb_MemblockReserve, block_size);
+  if (!block) return NULL;
   // Atomic add not required here, as threads won't race allocating blocks, plus
   // atomic fetch-add is slower than load/add/store on arm devices compiled
   // targetting pre-v8.1. Relaxed order is safe as nothing depends on order of
@@ -3279,13 +3327,21 @@ static bool _upb_Arena_AllocBlock(upb_Arena* a, size_t size) {
       upb_Atomic_Load(&ai->space_allocated, memory_order_relaxed);
   upb_Atomic_Store(&ai->space_allocated, old_space_allocated + block_size,
                    memory_order_relaxed);
-  UPB_ASSERT(UPB_PRIVATE(_upb_ArenaHas)(a) >= size);
-  return true;
-}
+  if (UPB_UNLIKELY(insert_after_head)) {
+    upb_ArenaInternal* ai = upb_Arena_Internal(a);
+    block->size_or_hint = block_size;
+    upb_MemBlock* head = ai->blocks;
+    block->next = head->next;
+    head->next = block;
 
-void* UPB_PRIVATE(_upb_Arena_SlowMalloc)(upb_Arena* a, size_t size) {
-  if (!_upb_Arena_AllocBlock(a, size)) return NULL;  // OOM
-  return upb_Arena_Malloc(a, size - UPB_ASAN_GUARD_SIZE);
+    char* allocated = UPB_PTR_AT(block, kUpb_MemblockReserve, char);
+    UPB_POISON_MEMORY_REGION(allocated + size, UPB_ASAN_GUARD_SIZE);
+    return allocated;
+  } else {
+    _upb_Arena_AddBlock(a, block, kUpb_MemblockReserve, block_size);
+    UPB_ASSERT(UPB_PRIVATE(_upb_ArenaHas)(a) >= size);
+    return upb_Arena_Malloc(a, size - UPB_ASAN_GUARD_SIZE);
+  }
 }
 
 static upb_Arena* _upb_Arena_InitSlow(upb_alloc* alloc, size_t first_size) {
@@ -3364,18 +3420,22 @@ static void _upb_Arena_DoFree(upb_ArenaInternal* ai) {
     // Load first since arena itself is likely from one of its blocks.
     upb_ArenaInternal* next_arena =
         (upb_ArenaInternal*)upb_Atomic_Load(&ai->next, memory_order_acquire);
-    // Freeing may have memory barriers that confuse tsan, so assert immdiately
+    // Freeing may have memory barriers that confuse tsan, so assert immediately
     // after load here
     if (next_arena) {
       UPB_TSAN_CHECK_PUBLISHED(next_arena);
     }
     upb_alloc* block_alloc = _upb_ArenaInternal_BlockAlloc(ai);
     upb_MemBlock* block = ai->blocks;
+    if (block && block->next) {
+      block->size_or_hint =
+          upb_Arena_FromInternal(ai)->UPB_PRIVATE(end) - (char*)block;
+    }
     upb_AllocCleanupFunc* alloc_cleanup = *ai->upb_alloc_cleanup;
     while (block != NULL) {
       // Load first since we are deleting block.
       upb_MemBlock* next_block = block->next;
-      upb_free_sized(block_alloc, block, block->size);
+      upb_free_sized(block_alloc, block, block->size_or_hint);
       block = next_block;
     }
     if (alloc_cleanup != NULL) {
@@ -3668,8 +3728,16 @@ void UPB_PRIVATE(_upb_Arena_SwapOut)(upb_Arena* des, const upb_Arena* src) {
   desi->blocks = srci->blocks;
 }
 
+bool _upb_Arena_WasLastAlloc(struct upb_Arena* a, void* ptr, size_t oldsize) {
+  upb_ArenaInternal* ai = upb_Arena_Internal(a);
+  upb_MemBlock* block = ai->blocks;
+  if (block == NULL) return false;
+  block = block->next;
+  if (block == NULL) return false;
+  char* start = UPB_PTR_AT(block, kUpb_MemblockReserve, char);
+  return ptr == start && oldsize == block->size_or_hint - kUpb_MemblockReserve;
+}
 
-#include <string.h>
 
 
 // Must be last.
@@ -3687,8 +3755,7 @@ bool upb_Message_SetMapEntry(upb_Map* map, const upb_MiniTable* m,
       upb_MiniTable_MapValue(map_entry_mini_table);
   // Map key/value cannot have explicit defaults,
   // hence assuming a zero default is valid.
-  upb_MessageValue default_val;
-  memset(&default_val, 0, sizeof(upb_MessageValue));
+  upb_MessageValue default_val = upb_MessageValue_Zero();
   upb_MessageValue map_entry_key =
       upb_Message_GetField(map_entry_message, map_entry_key_field, default_val);
   upb_MessageValue map_entry_value = upb_Message_GetField(
@@ -3907,21 +3974,36 @@ bool upb_Map_Delete(upb_Map* map, upb_MessageValue key, upb_MessageValue* val) {
 
 bool upb_Map_Next(const upb_Map* map, upb_MessageValue* key,
                   upb_MessageValue* val, size_t* iter) {
-  upb_StringView k;
   upb_value v;
-  const bool ok = upb_strtable_next2(&map->t.strtable, &k, &v, (intptr_t*)iter);
-  if (ok) {
-    _upb_map_fromkey(k, key, map->key_size);
+  bool ret;
+  if (map->UPB_PRIVATE(is_strtable)) {
+    upb_StringView strkey;
+    ret = upb_strtable_next2(&map->t.strtable, &strkey, &v, (intptr_t*)iter);
+    if (ret) {
+      _upb_map_fromkey(strkey, key, map->key_size);
+    }
+  } else {
+    uintptr_t intkey;
+    ret = upb_inttable_next(&map->t.inttable, &intkey, &v, (intptr_t*)iter);
+    if (ret) {
+      memcpy(key, &intkey, map->key_size);
+    }
+  }
+  if (ret) {
     _upb_map_fromvalue(v, val, map->val_size);
   }
-  return ok;
+  return ret;
 }
 
 UPB_API void upb_Map_SetEntryValue(upb_Map* map, size_t iter,
                                    upb_MessageValue val) {
   upb_value v;
   _upb_map_tovalue(&val, map->val_size, &v, NULL);
-  upb_strtable_setentryvalue(&map->t.strtable, iter, v);
+  if (map->UPB_PRIVATE(is_strtable)) {
+    upb_strtable_setentryvalue(&map->t.strtable, iter, v);
+  } else {
+    upb_inttable_setentryvalue(&map->t.inttable, iter, v);
+  }
 }
 
 bool upb_MapIterator_Next(const upb_Map* map, size_t* iter) {
@@ -3929,29 +4011,45 @@ bool upb_MapIterator_Next(const upb_Map* map, size_t* iter) {
 }
 
 bool upb_MapIterator_Done(const upb_Map* map, size_t iter) {
-  upb_strtable_iter i;
   UPB_ASSERT(iter != kUpb_Map_Begin);
-  i.t = &map->t.strtable;
-  i.index = iter;
-  return upb_strtable_done(&i);
+  if (map->UPB_PRIVATE(is_strtable)) {
+    upb_strtable_iter i;
+    i.t = &map->t.strtable;
+    i.index = iter;
+    return upb_strtable_done(&i);
+  } else {
+    return upb_inttable_done(&map->t.inttable, iter);
+  }
 }
 
 // Returns the key and value for this entry of the map.
 upb_MessageValue upb_MapIterator_Key(const upb_Map* map, size_t iter) {
-  upb_strtable_iter i;
   upb_MessageValue ret;
-  i.t = &map->t.strtable;
-  i.index = iter;
-  _upb_map_fromkey(upb_strtable_iter_key(&i), &ret, map->key_size);
+  if (map->UPB_PRIVATE(is_strtable)) {
+    upb_strtable_iter i;
+    i.t = &map->t.strtable;
+    i.index = iter;
+    _upb_map_fromkey(upb_strtable_iter_key(&i), &ret, map->key_size);
+  } else {
+    uintptr_t intkey = upb_inttable_iter_key(&map->t.inttable, iter);
+    memcpy(&ret, &intkey, map->key_size);
+  }
   return ret;
 }
 
 upb_MessageValue upb_MapIterator_Value(const upb_Map* map, size_t iter) {
-  upb_strtable_iter i;
+  upb_value v;
+  if (map->UPB_PRIVATE(is_strtable)) {
+    upb_strtable_iter i;
+    i.t = &map->t.strtable;
+    i.index = iter;
+    v = upb_strtable_iter_value(&i);
+  } else {
+    v = upb_inttable_iter_value(&map->t.inttable, iter);
+  }
+
   upb_MessageValue ret;
-  i.t = &map->t.strtable;
-  i.index = iter;
-  _upb_map_fromvalue(upb_strtable_iter_value(&i), &ret, map->val_size);
+  _upb_map_fromvalue(v, &ret, map->val_size);
   return ret;
 }
 
@@ -3975,11 +4073,19 @@ upb_Map* _upb_Map_New(upb_Arena* a, size_t key_size, size_t value_size) {
   upb_Map* map = upb_Arena_Malloc(a, sizeof(upb_Map));
   if (!map) return NULL;
 
-  upb_strtable_init(&map->t.strtable, 4, a);
+  if (key_size <= sizeof(uintptr_t) && key_size != UPB_MAPTYPE_STRING &&
+      value_size <= 4) {
+    // Use the inttable for primitive keys with small values, as inttable
+    // currently does not support UINT64_MAX in the array part.
+    if (!upb_inttable_init(&map->t.inttable, a)) return NULL;
+    map->UPB_PRIVATE(is_strtable) = false;
+  } else {
+    if (!upb_strtable_init(&map->t.strtable, 4, a)) return NULL;
+    map->UPB_PRIVATE(is_strtable) = true;
+  }
   map->key_size = key_size;
   map->val_size = value_size;
   map->UPB_PRIVATE(is_frozen) = false;
-  map->UPB_PRIVATE(is_strtable) = true;
 
   return map;
 }
@@ -3992,12 +4098,20 @@ upb_Map* _upb_Map_New(upb_Arena* a, size_t key_size, size_t value_size) {
 
 // Must be last.
 
+static int _upb_mapsorter_intkeys(const void* _a, const void* _b) {
+  const upb_tabent* const* a = _a;
+  const upb_tabent* const* b = _b;
+  uintptr_t a_key = (*a)->key;
+  uintptr_t b_key = (*b)->key;
+  return a_key < b_key ? -1 : a_key > b_key;
+}
+
 static void _upb_mapsorter_getkeys(const void* _a, const void* _b, void* a_key,
                                    void* b_key, size_t size) {
   const upb_tabent* const* a = _a;
   const upb_tabent* const* b = _b;
-  upb_StringView a_tabkey = upb_tabstrview((*a)->key);
-  upb_StringView b_tabkey = upb_tabstrview((*b)->key);
+  upb_StringView a_tabkey = upb_key_strview((*a)->key);
+  upb_StringView b_tabkey = upb_key_strview((*b)->key);
   _upb_map_fromkey(a_tabkey, a_key, size);
   _upb_map_fromkey(b_tabkey, b_key, size);
 }
@@ -4083,15 +4197,30 @@ static bool _upb_mapsorter_resize(_upb_mapsorter* s, _upb_sortedmap* sorted,
 
 bool _upb_mapsorter_pushmap(_upb_mapsorter* s, upb_FieldType key_type,
                             const upb_Map* map, _upb_sortedmap* sorted) {
-  int map_size = _upb_Map_Size(map);
-  UPB_ASSERT(map_size);
+  int map_size;
+  if (map->UPB_PRIVATE(is_strtable)) {
+    map_size = _upb_Map_Size(map);
+  } else {
+    // For inttable, only sort the table entries, since the array part is
+    // already in a sorted order.
+    map_size = map->t.inttable.t.count;
+  }
 
   if (!_upb_mapsorter_resize(s, sorted, map_size)) return false;
 
   // Copy non-empty entries from the table to s->entries.
   const void** dst = &s->entries[sorted->start];
-  const upb_tabent* src = map->t.strtable.t.entries;
-  const upb_tabent* end = src + upb_table_size(&map->t.strtable.t);
+  const upb_tabent* src;
+  const upb_tabent* end;
+  if (map->UPB_PRIVATE(is_strtable)) {
+    src = map->t.strtable.t.entries;
+    end = src + upb_table_size(&map->t.strtable.t);
+  } else {
+    // For inttable, only sort the table entries, since the array part is
+    // already in a sorted order.
+    src = map->t.inttable.t.entries;
+    end = src + upb_table_size(&map->t.inttable.t);
+  }
   for (; src < end; src++) {
     if (!upb_tabent_isempty(src)) {
       *dst = src;
@@ -4102,7 +4231,8 @@ bool _upb_mapsorter_pushmap(_upb_mapsorter* s, upb_FieldType key_type,
 
   // Sort entries according to the key type.
   qsort(&s->entries[sorted->start], map_size, sizeof(*s->entries),
-        compar[key_type]);
+        map->UPB_PRIVATE(is_strtable) ? compar[key_type]
+                                      : _upb_mapsorter_intkeys);
   return true;
 }
 
@@ -4111,7 +4241,7 @@ static int _upb_mapsorter_cmpext(const void* _a, const void* _b) {
   const upb_Extension* const* b = _b;
   uint32_t a_num = upb_MiniTableExtension_Number((*a)->ext);
   uint32_t b_num = upb_MiniTableExtension_Number((*b)->ext);
-  assert(a_num != b_num);
+  UPB_ASSERT(a_num != b_num);
   return a_num < b_num ? -1 : 1;
 }
 
@@ -4153,6 +4283,43 @@ bool UPB_PRIVATE(_upb_Message_AddUnknown)(upb_Message* msg, const char* data,
                                           size_t len, upb_Arena* arena,
                                           bool alias) {
   UPB_ASSERT(!upb_Message_IsFrozen(msg));
+  {
+    upb_Message_Internal* in = UPB_PRIVATE(_upb_Message_GetInternal)(msg);
+    if (in && in->size) {
+      upb_TaggedAuxPtr ptr = in->aux_data[in->size - 1];
+      if (upb_TaggedAuxPtr_IsUnknown(ptr)) {
+        upb_StringView* existing = upb_TaggedAuxPtr_UnknownData(ptr);
+        bool was_aliased = upb_TaggedAuxPtr_IsUnknownAliased(ptr);
+        if (alias) {
+          // Fast path if the field we're adding is immediately after the last
+          // added unknown field.
+          if (was_aliased && existing->data + existing->size == data) {
+            existing->size += len;
+            return true;
+          }
+        } else if (!was_aliased) {
+          // If part of the existing field was deleted at the beginning, we can
+          // reconstruct it by comparing the address of the end with the address
+          // of the entry itself; having the non-aliased tag means that the
+          // string_view and the data it points to are part of the same original
+          // upb_Arena_Malloc allocation, and the end of the string view
+          // represents the end of that allocation.
+          size_t prev_alloc_size =
+              (existing->data + existing->size) - (char*)existing;
+          if (SIZE_MAX - prev_alloc_size >= len) {
+            size_t new_alloc_size = prev_alloc_size + len;
+            if (upb_Arena_TryExtend(arena, existing, prev_alloc_size,
+                                    new_alloc_size)) {
+              memcpy(UPB_PTR_AT(existing, prev_alloc_size, void), data, len);
+              existing->size += len;
+              return true;
+            }
+          }
+        }
+      }
+    }
+  }
+
   // TODO: b/376969853  - Add debug check that the unknown field is an overall
   // valid proto field
   if (!UPB_PRIVATE(_upb_Message_ReserveSlot)(msg, arena)) {
@@ -4172,7 +4339,9 @@ bool UPB_PRIVATE(_upb_Message_AddUnknown)(upb_Message* msg, const char* data,
   }
   view->size = len;
   upb_Message_Internal* in = UPB_PRIVATE(_upb_Message_GetInternal)(msg);
-  in->aux_data[in->size++] = upb_TaggedAuxPtr_MakeUnknownData(view);
+  in->aux_data[in->size++] = alias
+                                 ? upb_TaggedAuxPtr_MakeUnknownDataAliased(view)
+                                 : upb_TaggedAuxPtr_MakeUnknownData(view);
   return true;
 }
 
@@ -4184,8 +4353,40 @@ bool UPB_PRIVATE(_upb_Message_AddUnknownV)(struct upb_Message* msg,
   UPB_ASSERT(count > 0);
   size_t total_len = 0;
   for (size_t i = 0; i < count; i++) {
+    if (SIZE_MAX - total_len < data[i].size) {
+      return false;
+    }
     total_len += data[i].size;
   }
+
+  {
+    upb_Message_Internal* in = UPB_PRIVATE(_upb_Message_GetInternal)(msg);
+    if (in && in->size) {
+      upb_TaggedAuxPtr ptr = in->aux_data[in->size - 1];
+      if (upb_TaggedAuxPtr_IsUnknown(ptr)) {
+        upb_StringView* existing = upb_TaggedAuxPtr_UnknownData(ptr);
+        if (!upb_TaggedAuxPtr_IsUnknownAliased(ptr)) {
+          size_t prev_alloc_size =
+              (existing->data + existing->size) - (char*)existing;
+          if (SIZE_MAX - prev_alloc_size >= total_len) {
+            size_t new_alloc_size = prev_alloc_size + total_len;
+            if (upb_Arena_TryExtend(arena, existing, prev_alloc_size,
+                                    new_alloc_size)) {
+              char* copy = UPB_PTR_AT(existing, prev_alloc_size, char);
+              for (size_t i = 0; i < count; i++) {
+                memcpy(copy, data[i].data, data[i].size);
+                copy += data[i].size;
+              }
+              existing->size += total_len;
+              return true;
+            }
+          }
+        }
+      }
+    }
+  }
+
+  if (SIZE_MAX - sizeof(upb_StringView) < total_len) return false;
   if (!UPB_PRIVATE(_upb_Message_ReserveSlot)(msg, arena)) return false;
 
   upb_StringView* view =
@@ -4219,23 +4420,64 @@ void _upb_Message_DiscardUnknown_shallow(upb_Message* msg) {
   in->size = size;
 }
 
-bool upb_Message_DeleteUnknown(upb_Message* msg, upb_StringView* data,
-                               uintptr_t* iter) {
+upb_Message_DeleteUnknownStatus upb_Message_DeleteUnknown(upb_Message* msg,
+                                                          upb_StringView* data,
+                                                          uintptr_t* iter,
+                                                          upb_Arena* arena) {
   UPB_ASSERT(!upb_Message_IsFrozen(msg));
   UPB_ASSERT(*iter != kUpb_Message_UnknownBegin);
   upb_Message_Internal* in = UPB_PRIVATE(_upb_Message_GetInternal)(msg);
   UPB_ASSERT(in);
   UPB_ASSERT(*iter <= in->size);
-#ifndef NDEBUG
   upb_TaggedAuxPtr unknown_ptr = in->aux_data[*iter - 1];
   UPB_ASSERT(upb_TaggedAuxPtr_IsUnknown(unknown_ptr));
   upb_StringView* unknown = upb_TaggedAuxPtr_UnknownData(unknown_ptr);
-  UPB_ASSERT(unknown->data == data->data);
-  UPB_ASSERT(unknown->size == data->size);
-#endif
-  in->aux_data[*iter - 1] = upb_TaggedAuxPtr_Null();
-
-  return upb_Message_NextUnknown(msg, data, iter);
+  if (unknown->data == data->data && unknown->size == data->size) {
+    // Remove whole field
+    in->aux_data[*iter - 1] = upb_TaggedAuxPtr_Null();
+  } else if (unknown->data == data->data) {
+    // Strip prefix
+    unknown->data += data->size;
+    unknown->size -= data->size;
+    *data = *unknown;
+    return kUpb_DeleteUnknown_IterUpdated;
+  } else if (unknown->data + unknown->size == data->data + data->size) {
+    // Truncate existing field
+    unknown->size -= data->size;
+    if (!upb_TaggedAuxPtr_IsUnknownAliased(unknown_ptr)) {
+      in->aux_data[*iter - 1] =
+          upb_TaggedAuxPtr_MakeUnknownDataAliased(unknown);
+    }
+  } else {
+    UPB_ASSERT(unknown->data < data->data &&
+               unknown->data + unknown->size > data->data + data->size);
+    // Split in the middle
+    upb_StringView* prefix = unknown;
+    upb_StringView* suffix = upb_Arena_Malloc(arena, sizeof(upb_StringView));
+    if (!suffix) {
+      return kUpb_DeleteUnknown_AllocFail;
+    }
+    if (!UPB_PRIVATE(_upb_Message_ReserveSlot)(msg, arena)) {
+      return kUpb_DeleteUnknown_AllocFail;
+    }
+    in = UPB_PRIVATE(_upb_Message_GetInternal)(msg);
+    if (*iter != in->size) {
+      // Shift later entries down so that unknown field ordering is preserved
+      memmove(&in->aux_data[*iter + 1], &in->aux_data[*iter],
+              sizeof(upb_TaggedAuxPtr) * (in->size - *iter));
+    }
+    in->aux_data[*iter] = upb_TaggedAuxPtr_MakeUnknownDataAliased(suffix);
+    if (!upb_TaggedAuxPtr_IsUnknownAliased(unknown_ptr)) {
+      in->aux_data[*iter - 1] = upb_TaggedAuxPtr_MakeUnknownDataAliased(prefix);
+    }
+    in->size++;
+    suffix->data = data->data + data->size;
+    suffix->size = (prefix->data + prefix->size) - suffix->data;
+    prefix->size = data->data - prefix->data;
+  }
+  return upb_Message_NextUnknown(msg, data, iter)
+             ? kUpb_DeleteUnknown_IterUpdated
+             : kUpb_DeleteUnknown_DeletedLast;
 }
 
 size_t upb_Message_ExtensionCount(const upb_Message* msg) {
@@ -5169,7 +5411,7 @@ typedef struct {
   uint32_t enum_data_capacity;
 } upb_MdEnumDecoder;
 
-static size_t upb_MiniTableEnum_Size(size_t count) {
+static size_t upb_MiniTableEnum_Size(uint32_t count) {
   return UPB_SIZEOF_FLEX(upb_MiniTableEnum, UPB_PRIVATE(data), count);
 }
 
@@ -5177,10 +5419,18 @@ static upb_MiniTableEnum* _upb_MiniTable_AddEnumDataMember(upb_MdEnumDecoder* d,
                                                            uint32_t val) {
   if (d->enum_data_count == d->enum_data_capacity) {
     size_t old_sz = upb_MiniTableEnum_Size(d->enum_data_capacity);
-    d->enum_data_capacity = UPB_MAX(2, d->enum_data_capacity * 2);
-    size_t new_sz = upb_MiniTableEnum_Size(d->enum_data_capacity);
+    if (d->enum_data_capacity > UINT32_MAX / 2) {
+      upb_MdDecoder_ErrorJmp(&d->base, "Out of memory");
+    }
+    uint32_t new_capacity = UPB_MAX(2, d->enum_data_capacity * 2);
+    if (UPB_SIZEOF_FLEX_WOULD_OVERFLOW(upb_MiniTableEnum, UPB_PRIVATE(data),
+                                       new_capacity)) {
+      upb_MdDecoder_ErrorJmp(&d->base, "Out of memory");
+    }
+    size_t new_sz = upb_MiniTableEnum_Size(new_capacity);
     d->enum_table = upb_Arena_Realloc(d->arena, d->enum_table, old_sz, new_sz);
     upb_MdDecoder_CheckOutOfMemory(&d->base, d->enum_table);
+    d->enum_data_capacity = new_capacity;
   }
   d->enum_table->UPB_PRIVATE(data)[d->enum_data_count++] = val;
   return d->enum_table;
@@ -5261,6 +5511,7 @@ static upb_MiniTableEnum* upb_MtDecoder_BuildMiniTableEnum(
 upb_MiniTableEnum* upb_MiniTableEnum_Build(const char* data, size_t len,
                                            upb_Arena* arena,
                                            upb_Status* status) {
+  uint32_t initial_capacity = 2;
   upb_MdEnumDecoder decoder = {
       .base =
           {
@@ -5268,10 +5519,11 @@ upb_MiniTableEnum* upb_MiniTableEnum_Build(const char* data, size_t len,
               .status = status,
           },
       .arena = arena,
-      .enum_table = upb_Arena_Malloc(arena, upb_MiniTableEnum_Size(2)),
+      .enum_table =
+          upb_Arena_Malloc(arena, upb_MiniTableEnum_Size(initial_capacity)),
       .enum_value_count = 0,
       .enum_data_count = 0,
-      .enum_data_capacity = 1,
+      .enum_data_capacity = initial_capacity,
   };
 
   return upb_MtDecoder_BuildMiniTableEnum(&decoder, data, len);
@@ -7701,17 +7953,6 @@ const char* _upb_Decoder_DecodeKnownField(upb_Decoder* d, const char* ptr,
   }
 }
 
-static const char* _upb_Decoder_ReverseSkipVarint(const char* ptr,
-                                                  uint32_t val) {
-  uint32_t seen = 0;
-  do {
-    ptr--;
-    seen <<= 7;
-    seen |= *ptr & 0x7f;
-  } while (seen != val);
-  return ptr;
-}
-
 static const char* _upb_Decoder_DecodeUnknownField(upb_Decoder* d,
                                                    const char* ptr,
                                                    upb_Message* msg,
@@ -7731,7 +7972,9 @@ static const char* _upb_Decoder_DecodeUnknownField(upb_Decoder* d,
     switch (wire_type) {
       case kUpb_WireType_Varint:
       case kUpb_WireType_Delimited:
+        // Skip the last byte
         start--;
+        // Skip bytes until we encounter the final byte of the tag varint.
         while (start[-1] & 0x80) start--;
         break;
       case kUpb_WireType_32Bit:
@@ -7745,8 +7988,23 @@ static const char* _upb_Decoder_DecodeUnknownField(upb_Decoder* d,
     }
 
     assert(start == d->debug_valstart);
-    uint32_t tag = ((uint32_t)field_number << 3) | wire_type;
-    start = _upb_Decoder_ReverseSkipVarint(start, tag);
+    {
+      // The varint parser does not enforce that integers are encoded with their
+      // minimum size; for example the value 1 could be encoded with three
+      // bytes: 0x81, 0x80, 0x00. These unnecessary trailing zeroes mean that we
+      // cannot skip backwards by the minimum encoded size of the tag; and
+      // unlike the loop for delimited or varint fields, we can't stop at a
+      // sentinel value because anything can precede a tag. Instead, parse back
+      // one byte at a time until we read the same tag value that was parsed
+      // earlier.
+      uint32_t tag = ((uint32_t)field_number << 3) | wire_type;
+      uint32_t seen = 0;
+      do {
+        start--;
+        seen <<= 7;
+        seen |= *start & 0x7f;
+      } while (seen != tag);
+    }
     assert(start == d->debug_tagstart);
 
     const char* input_start =
@@ -8043,7 +8301,8 @@ UPB_NORETURN static void encode_err(upb_encstate* e, upb_EncodeStatus s) {
 UPB_NOINLINE
 static void encode_growbuffer(upb_encstate* e, size_t bytes) {
   size_t old_size = e->limit - e->buf;
-  size_t new_size = upb_roundup_pow2(bytes + (e->limit - e->ptr));
+  size_t needed_size = bytes + (e->limit - e->ptr);
+  size_t new_size = upb_roundup_pow2(needed_size);
   char* new_buf = upb_Arena_Realloc(e->arena, e->buf, old_size, new_size);
 
   if (!new_buf) encode_err(e, kUpb_EncodeStatus_OutOfMemory);
@@ -8052,14 +8311,12 @@ static void encode_growbuffer(upb_encstate* e, size_t bytes) {
   // TODO: This is somewhat inefficient since we are copying twice.
   // Maybe create a realloc() that copies to the end of the new buffer?
   if (old_size > 0) {
-    memmove(new_buf + new_size - old_size, e->buf, old_size);
+    memmove(new_buf + new_size - old_size, new_buf, old_size);
   }
 
-  e->ptr = new_buf + new_size - (e->limit - e->ptr);
-  e->limit = new_buf + new_size;
   e->buf = new_buf;
-
-  e->ptr -= bytes;
+  e->limit = new_buf + new_size;
+  e->ptr = new_buf + new_size - needed_size;
 }
 
 /* Call to ensure that at least "bytes" bytes are available for writing at
@@ -8389,6 +8646,19 @@ static void encode_map(upb_encstate* e, const upb_Message* msg,
   if (!map || !upb_Map_Size(map)) return;
 
   if (e->options & kUpb_EncodeOption_Deterministic) {
+    if (!map->UPB_PRIVATE(is_strtable)) {
+      // For inttable, first encode the array part, then sort the table entries.
+      intptr_t iter = UPB_INTTABLE_BEGIN;
+      while ((size_t)++iter < map->t.inttable.array_size) {
+        upb_value value = map->t.inttable.array[iter];
+        if (!upb_inttable_is_sentinel(value)) {
+          upb_MapEntry ent;
+          memcpy(&ent.k, &iter, sizeof(iter));
+          _upb_map_fromvalue(value, &ent.v, map->val_size);
+          encode_mapentry(e, upb_MiniTableField_Number(f), layout, &ent);
+        }
+      }
+    }
     _upb_sortedmap sorted;
     _upb_mapsorter_pushmap(
         &e->sorter, layout->UPB_PRIVATE(fields)[0].UPB_PRIVATE(descriptortype),
@@ -8399,14 +8669,25 @@ static void encode_map(upb_encstate* e, const upb_Message* msg,
     }
     _upb_mapsorter_popmap(&e->sorter, &sorted);
   } else {
-    intptr_t iter = UPB_STRTABLE_BEGIN;
-    upb_StringView key;
     upb_value val;
-    while (upb_strtable_next2(&map->t.strtable, &key, &val, &iter)) {
-      upb_MapEntry ent;
-      _upb_map_fromkey(key, &ent.k, map->key_size);
-      _upb_map_fromvalue(val, &ent.v, map->val_size);
-      encode_mapentry(e, upb_MiniTableField_Number(f), layout, &ent);
+    if (map->UPB_PRIVATE(is_strtable)) {
+      intptr_t iter = UPB_STRTABLE_BEGIN;
+      upb_StringView strkey;
+      while (upb_strtable_next2(&map->t.strtable, &strkey, &val, &iter)) {
+        upb_MapEntry ent;
+        _upb_map_fromkey(strkey, &ent.k, map->key_size);
+        _upb_map_fromvalue(val, &ent.v, map->val_size);
+        encode_mapentry(e, upb_MiniTableField_Number(f), layout, &ent);
+      }
+    } else {
+      intptr_t iter = UPB_INTTABLE_BEGIN;
+      uintptr_t intkey = 0;
+      while (upb_inttable_next(&map->t.inttable, &intkey, &val, &iter)) {
+        upb_MapEntry ent;
+        memcpy(&ent.k, &intkey, map->key_size);
+        _upb_map_fromvalue(val, &ent.v, map->val_size);
+        encode_mapentry(e, upb_MiniTableField_Number(f), layout, &ent);
+      }
     }
   }
 }
@@ -11111,6 +11392,8 @@ const upb_MiniTableFile google_protobuf_descriptor_proto_upb_file_layout = {
  * Implementation is heavily inspired by Lua's ltable.c.
  */
 
+
+#include <stdint.h>
 #include <string.h>
 
 
@@ -11122,20 +11405,41 @@ const upb_MiniTableFile google_protobuf_descriptor_proto_upb_file_layout = {
 #define ARRAY_SIZE(x) \
   ((sizeof(x) / sizeof(0 [x])) / ((size_t)(!(sizeof(x) % sizeof(0 [x])))))
 
-static const double MAX_LOAD = 0.85;
-
 /* The minimum utilization of the array part of a mixed hash/array table.  This
  * is a speed/memory-usage tradeoff (though it's not straightforward because of
  * cache effects).  The lower this is, the more memory we'll use. */
 static const double MIN_DENSITY = 0.1;
 
-static bool is_pow2(uint64_t v) { return v == 0 || (v & (v - 1)) == 0; }
+#if defined(__has_builtin)
+#if __has_builtin(__builtin_popcount)
+#define UPB_FAST_POPCOUNT32(i) __builtin_popcount(i)
+#endif
+#elif defined(__GNUC__)
+#define UPB_FAST_POPCOUNT32(i) __builtin_popcount(i)
+#elif defined(_MSC_VER)
+#define UPB_FAST_POPCOUNT32(i) __popcnt(i)
+#endif
 
-static upb_value _upb_value_val(uint64_t val) {
-  upb_value ret;
-  _upb_value_setval(&ret, val);
-  return ret;
+UPB_INLINE int _upb_popcnt32(uint32_t i) {
+#ifdef UPB_FAST_POPCOUNT32
+  return UPB_FAST_POPCOUNT32(i);
+#else
+  int count = 0;
+  while (i != 0) {
+    count += i & 1;
+    i >>= 1;
+  }
+  return count;
+#endif
 }
+
+#undef UPB_FAST_POPCOUNT32
+
+UPB_INLINE uint8_t _upb_log2_table_size(upb_table* t) {
+  return _upb_popcnt32(t->mask);
+}
+
+static bool is_pow2(uint64_t v) { return v == 0 || (v & (v - 1)) == 0; }
 
 static int log2ceil(uint64_t v) {
   int ret = 0;
@@ -11167,29 +11471,41 @@ static lookupkey_t intkey(uintptr_t key) {
   return k;
 }
 
-typedef uint32_t hashfunc_t(upb_tabkey key);
-typedef bool eqlfunc_t(upb_tabkey k1, lookupkey_t k2);
+typedef uint32_t hashfunc_t(upb_key key);
+typedef bool eqlfunc_t(upb_key k1, lookupkey_t k2);
 
 /* Base table (shared code) ***************************************************/
 
-static uint32_t upb_inthash(uintptr_t key) { return (uint32_t)key; }
+static uint32_t upb_inthash(uintptr_t key) {
+  if (sizeof(uintptr_t) == 8) {
+    return (uint32_t)key ^ (uint32_t)(key >> 32);
+  } else {
+    UPB_ASSERT(sizeof(uintptr_t) == 4);
+    return (uint32_t)key;
+  }
+}
 
 static const upb_tabent* upb_getentry(const upb_table* t, uint32_t hash) {
   return t->entries + (hash & t->mask);
 }
 
-static bool upb_arrhas(upb_tabval val) { return val.val != (uint64_t)-1; }
-
-static bool isfull(upb_table* t) { return t->count == t->max_count; }
+static bool isfull(upb_table* t) {
+  uint32_t size = upb_table_size(t);
+  // 0.875 load factor
+  return t->count == (size - (size >> 3));
+}
 
 static bool init(upb_table* t, uint8_t size_lg2, upb_Arena* a) {
-  size_t bytes;
-
+  if (size_lg2 >= 32) {
+    return false;
+  }
   t->count = 0;
-  t->size_lg2 = size_lg2;
-  t->mask = upb_table_size(t) ? upb_table_size(t) - 1 : 0;
-  t->max_count = upb_table_size(t) * MAX_LOAD;
-  bytes = upb_table_size(t) * sizeof(upb_tabent);
+  uint32_t size = 1 << size_lg2;
+  t->mask = size - 1;  // 0 mask if size_lg2 is 0
+  if (upb_table_size(t) > (SIZE_MAX / sizeof(upb_tabent))) {
+    return false;
+  }
+  size_t bytes = upb_table_size(t) * sizeof(upb_tabent);
   if (bytes > 0) {
     t->entries = upb_Arena_Malloc(a, bytes);
     if (!t->entries) return false;
@@ -11221,7 +11537,7 @@ static const upb_tabent* findentry(const upb_table* t, lookupkey_t key,
                                    uint32_t hash, eqlfunc_t* eql) {
   const upb_tabent* e;
 
-  if (t->size_lg2 == 0) return NULL;
+  if (t->count == 0) return NULL;
   e = upb_getentry(t, hash);
   if (upb_tabent_isempty(e)) return NULL;
   while (1) {
@@ -11239,9 +11555,7 @@ static bool lookup(const upb_table* t, lookupkey_t key, upb_value* v,
                    uint32_t hash, eqlfunc_t* eql) {
   const upb_tabent* e = findentry(t, key, hash, eql);
   if (e) {
-    if (v) {
-      _upb_value_setval(v, e->val.val);
-    }
+    if (v) *v = e->val;
     return true;
   } else {
     return false;
@@ -11249,9 +11563,8 @@ static bool lookup(const upb_table* t, lookupkey_t key, upb_value* v,
 }
 
 /* The given key must not already exist in the table. */
-static void insert(upb_table* t, lookupkey_t key, upb_tabkey tabkey,
-                   upb_value val, uint32_t hash, hashfunc_t* hashfunc,
-                   eqlfunc_t* eql) {
+static void insert(upb_table* t, lookupkey_t key, upb_key tabkey, upb_value val,
+                   uint32_t hash, hashfunc_t* hashfunc, eqlfunc_t* eql) {
   upb_tabent* mainpos_e;
   upb_tabent* our_e;
 
@@ -11291,19 +11604,18 @@ static void insert(upb_table* t, lookupkey_t key, upb_tabkey tabkey,
     }
   }
   our_e->key = tabkey;
-  our_e->val.val = val.val;
+  our_e->val = val;
   UPB_ASSERT(findentry(t, key, hash, eql) == our_e);
 }
 
-static bool rm(upb_table* t, lookupkey_t key, upb_value* val,
-               upb_tabkey* removed, uint32_t hash, eqlfunc_t* eql) {
+static bool rm(upb_table* t, lookupkey_t key, upb_value* val, uint32_t hash,
+               eqlfunc_t* eql) {
   upb_tabent* chain = getentry_mutable(t, hash);
   if (upb_tabent_isempty(chain)) return false;
   if (eql(chain->key, key)) {
     /* Element to remove is at the head of its chain. */
     t->count--;
-    if (val) _upb_value_setval(val, chain->val.val);
-    if (removed) *removed = chain->key;
+    if (val) *val = chain->val;
     if (chain->next) {
       upb_tabent* move = (upb_tabent*)chain->next;
       *chain = *move;
@@ -11322,8 +11634,7 @@ static bool rm(upb_table* t, lookupkey_t key, upb_value* val,
       /* Found element to remove. */
       upb_tabent* rm = (upb_tabent*)chain->next;
       t->count--;
-      if (val) _upb_value_setval(val, chain->next->val.val);
-      if (removed) *removed = rm->key;
+      if (val) *val = chain->next->val;
       rm->key = 0; /* Make the slot empty. */
       chain->next = rm->next;
       return true;
@@ -11349,7 +11660,7 @@ static size_t begin(const upb_table* t) { return next(t, -1); }
 /* A simple "subclass" of upb_table that only adds a hash function for strings.
  */
 
-static upb_tabkey strcopy(lookupkey_t k2, upb_Arena* a) {
+static upb_key strcopy(lookupkey_t k2, upb_Arena* a) {
   uint32_t len = (uint32_t)k2.str.len;
   char* str = upb_Arena_Malloc(a, k2.str.len + sizeof(uint32_t) + 1);
   if (str == NULL) return 0;
@@ -11511,24 +11822,28 @@ static uint32_t _upb_Hash_NoSeed(const char* p, size_t n) {
   return _upb_Hash(p, n, _upb_Seed());
 }
 
-static uint32_t strhash(upb_tabkey key) {
+static uint32_t strhash(upb_key key) {
   uint32_t len;
-  char* str = upb_tabstr(key, &len);
+  char* str = upb_key_cstr(key, &len);
   return _upb_Hash_NoSeed(str, len);
 }
 
-static bool streql(upb_tabkey k1, lookupkey_t k2) {
+static bool streql(upb_key k1, lookupkey_t k2) {
   uint32_t len;
-  char* str = upb_tabstr(k1, &len);
+  char* str = upb_key_cstr(k1, &len);
   return len == k2.str.len && (len == 0 || memcmp(str, k2.str.str, len) == 0);
 }
 
+/** Calculates the number of entries required to hold an expected number of
+ * values, within the table's load factor. */
+static size_t _upb_entries_needed_for(size_t expected_size) {
+  size_t need_entries = expected_size + 1 + expected_size / 7;
+  UPB_ASSERT(need_entries - (need_entries >> 3) >= expected_size);
+  return need_entries;
+}
+
 bool upb_strtable_init(upb_strtable* t, size_t expected_size, upb_Arena* a) {
-  // Multiply by approximate reciprocal of MAX_LOAD (0.85), with pow2
-  // denominator.
-  size_t need_entries = (expected_size + 1) * 1204 / 1024;
-  UPB_ASSERT(need_entries >= expected_size * 0.85);
-  int size_lg2 = upb_Log2Ceiling(need_entries);
+  int size_lg2 = upb_Log2Ceiling(_upb_entries_needed_for(expected_size));
   return init(&t->t, size_lg2, a);
 }
 
@@ -11546,7 +11861,16 @@ bool upb_strtable_resize(upb_strtable* t, size_t size_lg2, upb_Arena* a) {
   upb_StringView key;
   upb_value val;
   while (upb_strtable_next2(t, &key, &val, &iter)) {
-    upb_strtable_insert(&new_table, key.data, key.size, val, a);
+    // Unlike normal insert, does not copy string data or possibly reallocate
+    // the table
+    lookupkey_t lookupkey = strkey2(key.data, key.size);
+    upb_key tabkey = (uintptr_t)(key.data - sizeof(uint32_t));
+
+    UPB_ASSERT(upb_key_strview(tabkey).data == key.data);
+    UPB_ASSERT(upb_key_strview(tabkey).size == key.size);
+
+    uint32_t hash = _upb_Hash_NoSeed(key.data, key.size);
+    insert(&new_table.t, lookupkey, tabkey, val, hash, &strhash, &streql);
   }
   *t = new_table;
   return true;
@@ -11554,22 +11878,19 @@ bool upb_strtable_resize(upb_strtable* t, size_t size_lg2, upb_Arena* a) {
 
 bool upb_strtable_insert(upb_strtable* t, const char* k, size_t len,
                          upb_value v, upb_Arena* a) {
-  lookupkey_t key;
-  upb_tabkey tabkey;
-  uint32_t hash;
-
   if (isfull(&t->t)) {
     /* Need to resize.  New table of double the size, add old elements to it. */
-    if (!upb_strtable_resize(t, t->t.size_lg2 + 1, a)) {
+    if (!upb_strtable_resize(t, _upb_log2_table_size(&t->t) + 1, a)) {
       return false;
     }
   }
 
-  key = strkey2(k, len);
-  tabkey = strcopy(key, a);
+  lookupkey_t key = strkey2(k, len);
+  upb_key tabkey = strcopy(key, a);
+
   if (tabkey == 0) return false;
 
-  hash = _upb_Hash_NoSeed(key.str.str, key.str.len);
+  uint32_t hash = _upb_Hash_NoSeed(key.str.str, key.str.len);
   insert(&t->t, key, tabkey, v, hash, &strhash, &streql);
   return true;
 }
@@ -11583,8 +11904,7 @@ bool upb_strtable_lookup2(const upb_strtable* t, const char* key, size_t len,
 bool upb_strtable_remove2(upb_strtable* t, const char* key, size_t len,
                           upb_value* val) {
   uint32_t hash = _upb_Hash_NoSeed(key, len);
-  upb_tabkey tabkey;
-  return rm(&t->t, strkey2(key, len), val, &tabkey, hash, &streql);
+  return rm(&t->t, strkey2(key, len), val, hash, &streql);
 }
 
 /* Iteration */
@@ -11608,14 +11928,14 @@ upb_StringView upb_strtable_iter_key(const upb_strtable_iter* i) {
   upb_StringView key;
   uint32_t len;
   UPB_ASSERT(!upb_strtable_done(i));
-  key.data = upb_tabstr(str_tabent(i)->key, &len);
+  key.data = upb_key_cstr(str_tabent(i)->key, &len);
   key.size = len;
   return key;
 }
 
 upb_value upb_strtable_iter_value(const upb_strtable_iter* i) {
   UPB_ASSERT(!upb_strtable_done(i));
-  return _upb_value_val(str_tabent(i)->val.val);
+  return str_tabent(i)->val;
 }
 
 void upb_strtable_iter_setdone(upb_strtable_iter* i) {
@@ -11635,9 +11955,9 @@ bool upb_strtable_next2(const upb_strtable* t, upb_StringView* key,
   if (tab_idx < upb_table_size(&t->t)) {
     upb_tabent* ent = &t->t.entries[tab_idx];
     uint32_t len;
-    key->data = upb_tabstr(ent->key, &len);
+    key->data = upb_key_cstr(ent->key, &len);
     key->size = len;
-    *val = _upb_value_val(ent->val.val);
+    *val = ent->val;
     *iter = tab_idx;
     return true;
   }
@@ -11669,8 +11989,7 @@ void upb_strtable_removeiter(upb_strtable* t, intptr_t* iter) {
 }
 
 void upb_strtable_setentryvalue(upb_strtable* t, intptr_t iter, upb_value v) {
-  upb_tabent* ent = &t->t.entries[iter];
-  ent->val.val = v.val;
+  t->t.entries[iter].val = v;
 }
 
 /* upb_inttable ***************************************************************/
@@ -11678,17 +11997,34 @@ void upb_strtable_setentryvalue(upb_strtable* t, intptr_t iter, upb_value v) {
 /* For inttables we use a hybrid structure where small keys are kept in an
  * array and large keys are put in the hash table. */
 
-static uint32_t inthash(upb_tabkey key) { return upb_inthash(key); }
+// The sentinel value used in the dense array part. Note that callers must
+// ensure that inttable is never used with a value of this sentinel type
+// (pointers and u32 values will never be; i32 needs to be handled carefully
+// to avoid sign-extending into this value).
+static const upb_value kInttableSentinel = {.val = UINT64_MAX};
 
-static bool inteql(upb_tabkey k1, lookupkey_t k2) { return k1 == k2.num; }
+static uint32_t inthash(upb_key key) { return upb_inthash(key); }
 
-static upb_tabval* mutable_array(upb_inttable* t) {
-  return (upb_tabval*)t->array;
+static bool inteql(upb_key k1, lookupkey_t k2) { return k1 == k2.num; }
+
+static upb_value* mutable_array(upb_inttable* t) {
+  return (upb_value*)t->array;
 }
 
-static upb_tabval* inttable_val(upb_inttable* t, uintptr_t key) {
+static const upb_value* inttable_array_get(const upb_inttable* t,
+                                           uintptr_t key) {
+  UPB_ASSERT(key < t->array_size);
+  const upb_value* val = &t->array[key];
+  return upb_inttable_is_sentinel(*val) ? NULL : val;
+}
+
+static bool inttable_array_has(const upb_inttable* t, uintptr_t key) {
+  return inttable_array_get(t, key) != NULL;
+}
+
+static upb_value* inttable_val(upb_inttable* t, uintptr_t key) {
   if (key < t->array_size) {
-    return upb_arrhas(t->array[key]) ? &(mutable_array(t)[key]) : NULL;
+    return (upb_value*)inttable_array_get(t, key);
   } else {
     upb_tabent* e =
         findentry_mutable(&t->t, intkey(key), upb_inthash(key), &inteql);
@@ -11696,8 +12032,8 @@ static upb_tabval* inttable_val(upb_inttable* t, uintptr_t key) {
   }
 }
 
-static const upb_tabval* inttable_val_const(const upb_inttable* t,
-                                            uintptr_t key) {
+static const upb_value* inttable_val_const(const upb_inttable* t,
+                                           uintptr_t key) {
   return inttable_val((upb_inttable*)t, key);
 }
 
@@ -11742,38 +12078,35 @@ bool upb_inttable_sizedinit(upb_inttable* t, size_t asize, int hsize_lg2,
 }
 
 bool upb_inttable_init(upb_inttable* t, upb_Arena* a) {
-  return upb_inttable_sizedinit(t, 0, 4, a);
+  // The init size of the table part to match that of strtable.
+  return upb_inttable_sizedinit(t, 0, 3, a);
 }
 
 bool upb_inttable_insert(upb_inttable* t, uintptr_t key, upb_value val,
                          upb_Arena* a) {
-  upb_tabval tabval;
-  tabval.val = val.val;
-  UPB_ASSERT(
-      upb_arrhas(tabval)); /* This will reject (uint64_t)-1.  Fix this. */
-
   if (key < t->array_size) {
-    UPB_ASSERT(!upb_arrhas(t->array[key]));
+    // TODO: This will reject in-bounds values which are
+    // (uint64_t)-1.
+    // Fix this by potentially using a bit field to track presence in the array.
+    UPB_ASSERT(!upb_inttable_is_sentinel(val));
+    UPB_ASSERT(!inttable_array_has(t, key));
     t->array_count++;
-    mutable_array(t)[key].val = val.val;
+    mutable_array(t)[key] = val;
   } else {
     if (isfull(&t->t)) {
       /* Need to resize the hash part, but we re-use the array part. */
       size_t i;
       upb_table new_table;
 
-      if (!init(&new_table, t->t.size_lg2 + 1, a)) {
+      if (!init(&new_table, _upb_log2_table_size(&t->t) + 1, a)) {
         return false;
       }
 
       for (i = begin(&t->t); i < upb_table_size(&t->t); i = next(&t->t, i)) {
         const upb_tabent* e = &t->t.entries[i];
-        uint32_t hash;
-        upb_value v;
-
-        _upb_value_setval(&v, e->val.val);
-        hash = upb_inthash(e->key);
-        insert(&new_table, intkey(e->key), e->key, v, hash, &inthash, &inteql);
+        uint32_t hash = upb_inthash(e->key);
+        insert(&new_table, intkey(e->key), e->key, e->val, hash, &inthash,
+               &inteql);
       }
 
       UPB_ASSERT(t->t.count == new_table.count);
@@ -11787,35 +12120,34 @@ bool upb_inttable_insert(upb_inttable* t, uintptr_t key, upb_value val,
 }
 
 bool upb_inttable_lookup(const upb_inttable* t, uintptr_t key, upb_value* v) {
-  const upb_tabval* table_v = inttable_val_const(t, key);
+  const upb_value* table_v = inttable_val_const(t, key);
   if (!table_v) return false;
-  if (v) _upb_value_setval(v, table_v->val);
+  if (v) *v = *table_v;
   return true;
 }
 
 bool upb_inttable_replace(upb_inttable* t, uintptr_t key, upb_value val) {
-  upb_tabval* table_v = inttable_val(t, key);
+  upb_value* table_v = inttable_val(t, key);
   if (!table_v) return false;
-  table_v->val = val.val;
+  *table_v = val;
   return true;
 }
 
 bool upb_inttable_remove(upb_inttable* t, uintptr_t key, upb_value* val) {
   bool success;
   if (key < t->array_size) {
-    if (upb_arrhas(t->array[key])) {
-      upb_tabval empty = UPB_TABVALUE_EMPTY_INIT;
+    if (inttable_array_has(t, key)) {
       t->array_count--;
       if (val) {
-        _upb_value_setval(val, t->array[key].val);
+        *val = t->array[key];
       }
-      mutable_array(t)[key] = empty;
+      mutable_array(t)[key] = kInttableSentinel;
       success = true;
     } else {
       success = false;
     }
   } else {
-    success = rm(&t->t, intkey(key), val, NULL, upb_inthash(key), &inteql);
+    success = rm(&t->t, intkey(key), val, upb_inthash(key), &inteql);
   }
   check(t);
   return success;
@@ -11862,7 +12194,7 @@ void upb_inttable_compact(upb_inttable* t, upb_Arena* a) {
     /* Insert all elements into new, perfectly-sized table. */
     size_t arr_size = max[size_lg2] + 1; /* +1 so arr[max] will fit. */
     size_t hash_count = upb_inttable_count(t) - arr_count;
-    size_t hash_size = hash_count ? (hash_count / MAX_LOAD) + 1 : 0;
+    size_t hash_size = hash_count ? _upb_entries_needed_for(hash_count) : 0;
     int hashsize_lg2 = log2ceil(hash_size);
 
     upb_inttable_sizedinit(&new_t, arr_size, hashsize_lg2, a);
@@ -11877,16 +12209,17 @@ void upb_inttable_compact(upb_inttable* t, upb_Arena* a) {
     }
 
     UPB_ASSERT(new_t.array_size == arr_size);
-    UPB_ASSERT(new_t.t.size_lg2 == hashsize_lg2);
   }
   *t = new_t;
 }
 
 void upb_inttable_clear(upb_inttable* t) {
   // Clear the array part.
-  size_t array_bytes = t->array_size * sizeof(upb_tabval);
+  size_t array_bytes = t->array_size * sizeof(upb_value);
   t->array_count = 0;
-  memset(mutable_array(t), 0, array_bytes);
+  // Clear the array by setting all bits to 1, as UINT64_MAX is the sentinel
+  // value for an empty array.
+  memset(mutable_array(t), 0xff, array_bytes);
 
   // Clear the table part.
   size_t bytes = upb_table_size(&t->t) * sizeof(upb_tabent);
@@ -11901,10 +12234,10 @@ bool upb_inttable_next(const upb_inttable* t, uintptr_t* key, upb_value* val,
   intptr_t i = *iter;
   if ((size_t)(i + 1) <= t->array_size) {
     while ((size_t)++i < t->array_size) {
-      upb_tabval ent = t->array[i];
-      if (upb_arrhas(ent)) {
+      const upb_value* ent = inttable_array_get(t, i);
+      if (ent) {
         *key = i;
-        *val = _upb_value_val(ent.val);
+        *val = *ent;
         *iter = i;
         return true;
       }
@@ -11913,19 +12246,20 @@ bool upb_inttable_next(const upb_inttable* t, uintptr_t* key, upb_value* val,
   }
 
   size_t tab_idx = next(&t->t, i - t->array_size);
-  // We should set the iterator any way. When we are done, the iterator value is
-  // invalidated.
-  // `upb_inttable_done` will check on the iterator value to determine if the
-  // iteration is done.
-  *iter = tab_idx + t->array_size;
   if (tab_idx < upb_table_size(&t->t)) {
     upb_tabent* ent = &t->t.entries[tab_idx];
     *key = ent->key;
-    *val = _upb_value_val(ent->val.val);
+    *val = ent->val;
+    *iter = tab_idx + t->array_size;
     return true;
+  } else {
+    // We should set the iterator any way. When we are done, the iterator value
+    // is invalidated. `upb_inttable_done` will check on the iterator value to
+    // determine if the iteration is done.
+    *iter = INTPTR_MAX - 1;  // To disambiguate from UPB_INTTABLE_BEGIN, to
+                             // match the behavior of `upb_strtable_iter`.
+    return false;
   }
-
-  return false;
 }
 
 void upb_inttable_removeiter(upb_inttable* t, intptr_t* iter) {
@@ -11958,10 +12292,10 @@ void upb_inttable_removeiter(upb_inttable* t, intptr_t* iter) {
 
 void upb_inttable_setentryvalue(upb_inttable* t, intptr_t iter, upb_value v) {
   if ((size_t)iter < t->array_size) {
-    mutable_array(t)[iter].val = v.val;
+    mutable_array(t)[iter] = v;
   } else {
     upb_tabent* ent = &t->t.entries[iter - t->array_size];
-    ent->val.val = v.val;
+    ent->val = v;
   }
 }
 
@@ -11969,7 +12303,7 @@ bool upb_inttable_done(const upb_inttable* t, intptr_t iter) {
   if ((uintptr_t)iter >= t->array_size + upb_table_size(&t->t)) {
     return true;
   } else if ((size_t)iter < t->array_size) {
-    return !upb_arrhas(t->array[iter]);
+    return !inttable_array_has(t, iter);
   } else {
     return upb_tabent_isempty(&t->t.entries[iter - t->array_size]);
   }
@@ -11983,10 +12317,11 @@ uintptr_t upb_inttable_iter_key(const upb_inttable* t, intptr_t iter) {
 
 upb_value upb_inttable_iter_value(const upb_inttable* t, intptr_t iter) {
   UPB_ASSERT(!upb_inttable_done(t, iter));
-  uint64_t val = (size_t)iter < t->array_size
-                     ? t->array[iter].val
-                     : t->t.entries[iter - t->array_size].val.val;
-  return _upb_value_val(val);
+  if ((size_t)iter < t->array_size) {
+    return t->array[iter];
+  } else {
+    return t->t.entries[iter - t->array_size].val;
+  }
 }
 
 
@@ -12217,17 +12552,6 @@ upb_Extension* UPB_PRIVATE(_upb_Message_GetOrCreateExtension)(
   return ext;
 }
 
-void upb_Message_ReplaceUnknownWithExtension(struct upb_Message* msg,
-                                             uintptr_t iter,
-                                             const upb_Extension* ext) {
-  UPB_ASSERT(iter != 0);
-  upb_Message_Internal* in = UPB_PRIVATE(_upb_Message_GetInternal)(msg);
-  UPB_ASSERT(in);
-  size_t index = iter - 1;
-  upb_TaggedAuxPtr tagged_ptr = in->aux_data[index];
-  UPB_ASSERT(upb_TaggedAuxPtr_IsUnknown(tagged_ptr));
-  in->aux_data[index] = upb_TaggedAuxPtr_MakeExtension(ext);
-}
 
 #include <math.h>
 #include <stddef.h>
@@ -17785,6 +18109,7 @@ google_protobuf_ServiceDescriptorProto* upb_ServiceDef_ToProto(const upb_Service
 #undef UPB_SIZE
 #undef UPB_PTR_AT
 #undef UPB_SIZEOF_FLEX
+#undef UPB_SIZEOF_FLEX_WOULD_OVERFLOW
 #undef UPB_MAPTYPE_STRING
 #undef UPB_EXPORT
 #undef UPB_INLINE

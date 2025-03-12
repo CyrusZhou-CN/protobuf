@@ -8,14 +8,18 @@
 #ifndef UPB_HASH_INT_TABLE_H_
 #define UPB_HASH_INT_TABLE_H_
 
+#include <stddef.h>
+#include <stdint.h>
+
 #include "upb/hash/common.h"
+#include "upb/mem/arena.h"
 
 // Must be last.
 #include "upb/port/def.inc"
 
 typedef struct {
   upb_table t;              // For entries that don't fit in the array part.
-  const upb_tabval* array;  // Array part of the table. See const note above.
+  const upb_value* array;   // Array part of the table. See const note above.
   size_t array_size;        // Array part size.
   size_t array_count;       // Array part number of elements.
 } upb_inttable;
@@ -79,6 +83,10 @@ void upb_inttable_setentryvalue(upb_inttable* t, intptr_t iter, upb_value v);
 bool upb_inttable_done(const upb_inttable* t, intptr_t i);
 uintptr_t upb_inttable_iter_key(const upb_inttable* t, intptr_t iter);
 upb_value upb_inttable_iter_value(const upb_inttable* t, intptr_t iter);
+
+UPB_INLINE bool upb_inttable_is_sentinel(upb_value v) {
+  return v.val == UINT64_MAX;
+}
 
 #ifdef __cplusplus
 } /* extern "C" */
