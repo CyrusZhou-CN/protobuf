@@ -1136,7 +1136,7 @@ public final class TextFormat {
      * containsSilentMarkerAfterPrevToken.
      */
     private void detectSilentMarker(
-        Tokenizer tokenizer, Descriptor immediateMessageType, String fieldName) {
+        TxtpbTokenizer tokenizer, Descriptor immediateMessageType, String fieldName) {
     }
 
     /**
@@ -1382,7 +1382,7 @@ public final class TextFormat {
         final ExtensionRegistry extensionRegistry,
         final Message.Builder builder)
         throws ParseException {
-      final Tokenizer tokenizer = new Tokenizer(input);
+      final TxtpbTokenizer tokenizer = new TxtpbTokenizer(input);
       MessageReflection.BuilderAdapter target = new MessageReflection.BuilderAdapter(builder);
       List<UnknownField> unknownFields = new ArrayList<UnknownField>();
 
@@ -1394,7 +1394,7 @@ public final class TextFormat {
 
     /** Parse a single field from {@code tokenizer} and merge it into {@code builder}. */
     private void mergeField(
-        final Tokenizer tokenizer,
+        final TxtpbTokenizer tokenizer,
         final ExtensionRegistry extensionRegistry,
         final MessageReflection.MergeTarget target,
         List<UnknownField> unknownFields,
@@ -1411,7 +1411,7 @@ public final class TextFormat {
 
     /** Parse a single field from {@code tokenizer} and merge it into {@code target}. */
     private void mergeField(
-        final Tokenizer tokenizer,
+        final TxtpbTokenizer tokenizer,
         final ExtensionRegistry extensionRegistry,
         final MessageReflection.MergeTarget target,
         TextFormatParseInfoTree.Builder parseTreeBuilder,
@@ -1568,7 +1568,7 @@ public final class TextFormat {
       }
     }
 
-    private String consumeFullTypeName(Tokenizer tokenizer) throws ParseException {
+    private String consumeFullTypeName(TxtpbTokenizer tokenizer) throws ParseException {
       // If there is not a leading `[`, this is just a type name.
       if (!tokenizer.tryConsume("[")) {
         return tokenizer.consumeIdentifier();
@@ -1594,7 +1594,7 @@ public final class TextFormat {
      * Parse a one or more field values from {@code tokenizer} and merge it into {@code builder}.
      */
     private void consumeFieldValues(
-        final Tokenizer tokenizer,
+        final TxtpbTokenizer tokenizer,
         final ExtensionRegistry extensionRegistry,
         final MessageReflection.MergeTarget target,
         final FieldDescriptor field,
@@ -1639,7 +1639,7 @@ public final class TextFormat {
 
     /** Parse a single field value from {@code tokenizer} and merge it into {@code builder}. */
     private void consumeFieldValue(
-        final Tokenizer tokenizer,
+        final TxtpbTokenizer tokenizer,
         final ExtensionRegistry extensionRegistry,
         final MessageReflection.MergeTarget target,
         final FieldDescriptor field,
@@ -1809,7 +1809,7 @@ public final class TextFormat {
     }
 
     private void mergeAnyFieldValue(
-        final Tokenizer tokenizer,
+        final TxtpbTokenizer tokenizer,
         final ExtensionRegistry extensionRegistry,
         MergeTarget target,
         final TextFormatParseInfoTree.Builder parseTreeBuilder,
@@ -1876,7 +1876,7 @@ public final class TextFormat {
     }
 
     /** Skips the next field including the field's name and value. */
-    private void skipField(Tokenizer tokenizer, Descriptor type, int recursionLimit)
+    private void skipField(TxtpbTokenizer tokenizer, Descriptor type, int recursionLimit)
         throws ParseException {
       String name = consumeFullTypeName(tokenizer);
       detectSilentMarker(tokenizer, type, name);
@@ -1892,7 +1892,7 @@ public final class TextFormat {
     /**
      * Skips the whole body of a message including the beginning delimiter and the ending delimiter.
      */
-    private void skipFieldMessage(Tokenizer tokenizer, Descriptor type, int recursionLimit)
+    private void skipFieldMessage(TxtpbTokenizer tokenizer, Descriptor type, int recursionLimit)
         throws ParseException {
       final String delimiter;
       if (tokenizer.tryConsume("<")) {
@@ -1908,7 +1908,7 @@ public final class TextFormat {
     }
 
     /** Skips a field value. */
-    private void skipFieldValue(Tokenizer tokenizer) throws ParseException {
+    private void skipFieldValue(TxtpbTokenizer tokenizer) throws ParseException {
       if (!tokenizer.tryConsumeByteString()
           && !tokenizer.tryConsumeIdentifier() // includes enum & boolean
           && !tokenizer.tryConsumeInt64() // includes int32
@@ -1928,7 +1928,7 @@ public final class TextFormat {
      * be a message or the input is ill-formed. For short-formed repeated fields (i.e. with "[]"),
      * if it is repeated scalar, there must be a ":" between the field name and the starting "[" .
      */
-    private void guessFieldTypeAndSkip(Tokenizer tokenizer, Descriptor type, int recursionLimit)
+    private void guessFieldTypeAndSkip(TxtpbTokenizer tokenizer, Descriptor type, int recursionLimit)
         throws ParseException {
       boolean semicolonConsumed = tokenizer.tryConsume(":");
       if (tokenizer.lookingAt("[")) {
@@ -1951,7 +1951,7 @@ public final class TextFormat {
      * <p>Reports an error if scalar type is not allowed but showing up inside "[]".
      */
     private void skipFieldShortFormedRepeated(
-        Tokenizer tokenizer, boolean scalarAllowed, Descriptor type, int recursionLimit)
+        TxtpbTokenizer tokenizer, boolean scalarAllowed, Descriptor type, int recursionLimit)
         throws ParseException {
       if (!tokenizer.tryConsume("[") || tokenizer.tryConsume("]")) {
         // Try skipping "[]".

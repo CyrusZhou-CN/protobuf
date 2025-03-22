@@ -25,16 +25,26 @@ cc_library(
 
 cc_binary(
     name = "protoc-gen-upbdefs",
-    srcs = ["generator.cc"],
+    srcs = [
+        "context.h",
+        "generator.cc",
+        "header.cc",
+        "header.h",
+        "source.cc",
+        "source.h",
+    ],
     copts = UPB_DEFAULT_CPPOPTS,
     visibility = [
         "//pkg:__pkg__",
     ],
     deps = [
         ":names",
+        "//src/google/protobuf",
         "//src/google/protobuf:descriptor_upb_c_proto",
         "//src/google/protobuf/compiler:code_generator",
         "//src/google/protobuf/compiler:plugin",
+        "//src/google/protobuf/io",
+        "//src/google/protobuf/io:printer",
         "//upb:mem",
         "//upb:port",
         "//upb:reflection",
@@ -49,7 +59,9 @@ cc_binary(
         "@abseil-cpp//absl/memory",
         "@abseil-cpp//absl/strings",
         "@abseil-cpp//absl/strings:cord",
+        "@abseil-cpp//absl/strings:str_format",
         "@abseil-cpp//absl/strings:string_view",
+        "@abseil-cpp//absl/types:span",
     ],
 )
 
@@ -60,7 +72,6 @@ proto_lang_toolchain(
     plugin = ":protoc-gen-upbdefs",
     plugin_format_flag = "--plugin=protoc-gen-upbdefs=%s",
     progress_message = "Generating upb protos",
-    runtime = "//upb:generated_reflection_support__only_for_generated_code_do_not_use__i_give_permission_to_break_me",
-    # TODO: Restrict to "//bazel:__pkg__" once we are on Bazel >=6.5.
-    visibility = ["//visibility:public"],
+    runtime = "//upb:generated_reflection_support",
+    visibility = ["//bazel:__pkg__"],
 )
