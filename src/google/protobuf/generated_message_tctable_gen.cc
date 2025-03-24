@@ -285,24 +285,16 @@ bool IsFieldEligibleForFastParsing(
       // Some bytes fields can be handled on fast path.
     case FieldDescriptor::TYPE_STRING:
     case FieldDescriptor::TYPE_BYTES: {
-      if (options.is_string_inlined) {
+      if (options.use_micro_string &&
+          field->cpp_string_type() == FieldDescriptor::CppStringType::kView) {
+        // TODO: Add fast parsers.
+        return false;
+      } else if (options.is_string_inlined) {
         ABSL_CHECK(!field->is_repeated());
         // For inlined strings, the donation state index is stored in the
         // `aux_idx` field of the fast parsing info. We need to check the range
         // of that value instead of the auxiliary index.
         aux_idx = entry.inlined_string_idx;
-      }
-      break;
-    }
-
-    case FieldDescriptor::TYPE_ENUM: {
-      uint8_t rmax_value;
-      if (!message_options.uses_codegen &&
-          GetEnumRangeInfo(field, rmax_value) == EnumRangeInfo::kNone) {
-        // We can't use fast parsing for these entries because we can't specify
-        // the validator.
-        // TODO: Implement a fast parser for these enums.
-        return false;
       }
       break;
     }
@@ -696,7 +688,8 @@ uint16_t MakeTypeCardForField(
           type_card |= fl::kRepSString;
         } else {
           // Otherwise, non-repeated string fields use ArenaStringPtr.
-          type_card |= fl::kRepAString;
+          type_card |=
+              options.use_micro_string ? fl::kRepMString : fl::kRepAString;
         }
         break;
     }
