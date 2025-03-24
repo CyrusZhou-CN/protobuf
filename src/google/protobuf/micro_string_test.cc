@@ -947,7 +947,12 @@ TEST(MicroStringTest, MemoryUsageComparison) {
     int64_t this_micro_str_used = micro_str.SpaceUsedExcludingSelfLong();
     int64_t this_arena_str_used = SpaceUsedExcludingSelfLong(arena_str);
     // We expect to always use the same or less memory.
-    EXPECT_LE(this_micro_str_used, this_arena_str_used);
+    // Except in platforms where the size of std::string and the alignment of
+    // the arena break this for small strings.
+    const bool exception = sizeof(void*) == 4 && this_arena_str_used < 16;
+    if (!exception) {
+      EXPECT_LE(this_micro_str_used, this_arena_str_used);
+    }
 
     int64_t diff = micro_str_used - arena_str_used;
     int64_t this_diff = this_micro_str_used - this_arena_str_used;
