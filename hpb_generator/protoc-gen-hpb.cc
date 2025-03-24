@@ -198,7 +198,6 @@ void WriteSource(const protobuf::FileDescriptor* file, Context& ctx,
     WriteMessageImplementations(file, ctx);
     const std::vector<const protobuf::FieldDescriptor*> this_file_exts =
         SortedExtensions(file);
-    WriteExtensionIdentifiers(this_file_exts, ctx);
   });
 
   ctx.Emit("#include \"upb/port/undef.inc\"\n\n");
