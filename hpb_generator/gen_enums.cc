@@ -23,6 +23,21 @@ namespace google::protobuf::hpb_generator {
 namespace protobuf = ::proto2;
 using Sub = protobuf::io::Printer::Sub;
 
+namespace {
+
+std::deque<absl::string_view> ContainingTypeNames(
+    const protobuf::EnumDescriptor* enum_descriptor) {
+  std::deque<absl::string_view> containing_type_names;
+  auto containing_type = enum_descriptor->containing_type();
+  while (containing_type != nullptr) {
+    containing_type_names.push_front(containing_type->name());
+    containing_type = containing_type->containing_type();
+  }
+  return containing_type_names;
+}
+
+}  // namespace
+
 // Convert enum value to C++ literal.
 //
 // In C++, an value of -2147483648 gets interpreted as the negative of
@@ -39,8 +54,8 @@ std::string EnumInt32ToString(int number) {
 }
 
 std::string EnumTypeName(const protobuf::EnumDescriptor* enum_descriptor) {
-  auto containing_type = enum_descriptor->containing_type();
-  if (containing_type == nullptr) {
+  auto containing_types = ContainingTypeNames(enum_descriptor);
+  if (containing_types.empty()) {
     // enums types with no package name are prefixed with protos_ to prevent
     // conflicts with generated C headers.
     if (enum_descriptor->file()->package().empty()) {
@@ -49,16 +64,18 @@ std::string EnumTypeName(const protobuf::EnumDescriptor* enum_descriptor) {
     }
     return ToCIdent(enum_descriptor->name());
   } else {
+    const std::string containing_type_name =
+        absl::StrJoin(containing_types, "_");
     // Since the enum is in global name space (no package), it will have the
     // same classified name as the C header include, to prevent collision
     // rename as above.
-    if (containing_type->file()->package().empty()) {
-      return ToCIdent(absl::StrCat(containing_type->name(), "_",
+    if (enum_descriptor->containing_type()->file()->package().empty()) {
+      return ToCIdent(absl::StrCat(containing_type_name, "_",
                                    kNoPackageNamePrefix,
                                    enum_descriptor->name()));
     } else {
       return ToCIdent(
-          absl::StrCat(containing_type->name(), "_", enum_descriptor->name()));
+          absl::StrCat(containing_type_name, "_", enum_descriptor->name()));
     }
   }
 }
@@ -66,10 +83,12 @@ std::string EnumTypeName(const protobuf::EnumDescriptor* enum_descriptor) {
 std::string EnumValueSymbolInNameSpace(
     const protobuf::EnumDescriptor* desc,
     const protobuf::EnumValueDescriptor* value) {
-  auto containing_type = desc->containing_type();
-  if (containing_type != nullptr) {
-    return ToCIdent(absl::StrCat(containing_type->name(), "_", desc->name(),
-                                 "_", value->name()));
+  auto containing_types = ContainingTypeNames(desc);
+  if (!containing_types.empty()) {
+    const std::string containing_type_name =
+        absl::StrJoin(containing_types, "_");
+    return ToCIdent(absl::StrCat(containing_type_name, "_", desc->name(), "_",
+                                 value->name()));
   } else {
     // protos enum values with no package name are prefixed with protos_ to
     // prevent conflicts with generated C headers.
