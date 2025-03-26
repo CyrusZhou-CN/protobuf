@@ -163,6 +163,36 @@ where
         self.as_view().get(index)
     }
 
+    /// Gets the value at `index`.
+    ///
+    /// Returns `None` if `index > len`.
+    #[inline]
+    pub fn get_mut<'r>(&'r mut self, index: usize) -> Option<Mut<'msg, T>>
+    where
+        T: MutProxied,
+        'r: 'msg,
+    {
+        if index >= self.len() {
+            return None;
+        }
+        // SAFETY: `index` has been checked to be in-bounds
+        Some(unsafe { self.get_mut_unchecked(index) })
+    }
+
+    /// Gets the value at `index` without bounds-checking.
+    ///
+    /// # Safety
+    /// Undefined behavior if `index >= len`
+    #[inline]
+    pub unsafe fn get_mut_unchecked<'r>(&'r mut self, index: usize) -> Mut<'msg, T>
+    where
+        T: MutProxied,
+        'r: 'msg,
+    {
+        // SAFETY: in-bounds as promised
+        unsafe { T::repeated_get_mut_unchecked(self.as_mut(), index) }
+    }
+
     /// Gets the value at `index` without bounds-checking.
     ///
     /// # Safety
@@ -298,6 +328,16 @@ pub unsafe trait ProxiedInRepeated: Proxied {
     /// # Safety
     /// `index` must be less than `Self::repeated_len(repeated)`
     unsafe fn repeated_get_unchecked(repeated: View<Repeated<Self>>, index: usize) -> View<Self>;
+
+    /// # Safety
+    /// `index` must be less than `Self::repeated_len(repeated)`
+    #[allow(unused_variables)]
+    unsafe fn repeated_get_mut_unchecked(repeated: Mut<Repeated<Self>>, index: usize) -> Mut<Self>
+    where
+        Self: MutProxied,
+    {
+        panic!("repeated_get_mut_unchecked is only implemented for messages");
+    }
 
     /// # Safety
     /// `index` must be less than `Self::repeated_len(repeated)`
