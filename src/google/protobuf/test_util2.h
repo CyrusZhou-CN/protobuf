@@ -8,12 +8,14 @@
 #ifndef GOOGLE_PROTOBUF_TEST_UTIL2_H__
 #define GOOGLE_PROTOBUF_TEST_UTIL2_H__
 
+#include <cstdint>
 #include <string>
 
+#include "google/protobuf/compiler/profile.pb.h"
 #include <gtest/gtest.h>
+#include "absl/log/absl_check.h"
 #include "absl/strings/str_cat.h"
 #include "absl/strings/string_view.h"
-#include "absl/strings/strip.h"
 #include "google/protobuf/io/zero_copy_stream.h"
 #include "google/protobuf/io/zero_copy_stream_impl_lite.h"
 #include "google/protobuf/util/message_differencer.h"
@@ -23,6 +25,9 @@
 namespace google {
 namespace protobuf {
 namespace TestUtil {
+
+using ::google::protobuf::compiler::FieldAccessInfo;
+using ::google::protobuf::compiler::MessageAccessInfo;
 
 inline std::string TestSourceDir() {
   return google::protobuf::TestSourceDir();
@@ -39,6 +44,23 @@ bool EqualsToSerialized(const ProtoType& message, const std::string& data) {
   ProtoType other;
   other.ParsePartialFromString(data);
   return util::MessageDifferencer::Equals(message, other);
+}
+
+inline MessageAccessInfo* InitMessageAccessInfo(MessageAccessInfo* info,
+                                                absl::string_view name,
+                                                uint64_t count) {
+  info->set_name(name);
+  info->set_count(count);
+  return info;
+}
+
+inline void InitFieldAccessInfo(FieldAccessInfo* info, absl::string_view name,
+                                uint64_t getters_count, uint64_t setters_count,
+                                uint64_t configs_count) {
+  info->set_name(name);
+  info->set_getters_count(getters_count);
+  info->set_setters_count(setters_count);
+  info->set_configs_count(configs_count);
 }
 
 // Wraps io::ArrayInputStream while checking against bound. When a blocking
