@@ -14,11 +14,11 @@
 #import "GPBRootObject_PackagePrivate.h"
 #import "GPBTestUtilities.h"
 
-#if GOOGLE_PROTOBUF_OBJC_MIN_SUPPORTED_VERSION > 30007
+#if GOOGLE_PROTOBUF_OBJC_MIN_SUPPORTED_VERSION > 40311
 #error "Time to remove this test."
 #else
 
-@interface Message30007FormatTest : GPBTestCase
+@interface Message40311FormatTest : GPBTestCase
 @end
 
 // clang-format off
@@ -26,16 +26,16 @@
 
 // -------------------------------------------------------------------------------------------------
 //
-// This is extracted from generated code with the 30007 format for the following proto:
+// This is extracted from generated code with the 40311 format for the following proto:
 //
 //  syntax = "proto2";
 //
-//  enum Enum30007 {
+//  enum Enum40311 {
 //    FOO = 0;
 //    BAR = 1;
 //  }
 //
-//  message Message30007 {
+//  message Message40311 {
 //    message SubMessage {
 //      optional int32 x = 1;
 //    }
@@ -44,91 +44,93 @@
 //      SUB_BAR = 1;
 //    }
 //    optional string name = 1;
-//    optional Enum30007 value = 2;
+//    optional Enum40311 value = 2;
 //    repeated string names = 11;
-//    repeated Enum30007 values = 12;
+//    repeated Enum40311 values = 12;
 //    optional SubMessage sub_m = 20;
 //    optional SubEnum sub_e = 21;
 //    extensions 100 to max;
 //  }
 //
-//  extend Message30007 {
-//    optional Message30007 other_m = 100;
-//    optional Enum30007 other_e = 101;
-//    repeated Message30007 other_ms = 110;
-//    repeated Enum30007 other_es = 111;
+//  extend Message40311 {
+//    optional Message40311 other_m = 100;
+//    optional Enum40311 other_e = 101;
+//    repeated Message40311 other_ms = 110;
+//    repeated Enum40311 other_es = 111;
 //  }
 //
 // -------------------------------------------------------------------------------------------------
 
-@class Message30007_SubMessage;
+@class Message40311_SubMessage;
 
 NS_ASSUME_NONNULL_BEGIN
 
-typedef GPB_ENUM(Enum30007) {
-  Enum30007_Foo = 0,
-  Enum30007_Bar = 1,
+typedef GPB_ENUM(Enum40311) {
+  Enum40311_Foo = 0,
+  Enum40311_Bar = 1,
 };
 
-GPBEnumDescriptor *Enum30007_EnumDescriptor(void);
-BOOL Enum30007_IsValidValue(int32_t value);
+GPBEnumDescriptor *Enum40311_EnumDescriptor(void);
 
-typedef GPB_ENUM(Message30007_SubEnum) {
-  Message30007_SubEnum_SubFoo = 0,
-  Message30007_SubEnum_SubBar = 1,
+BOOL Enum40311_IsValidValue(int32_t value);
+
+#pragma mark - Enum Message40311_SubEnum
+
+typedef GPB_ENUM(Message40311_SubEnum) {
+  Message40311_SubEnum_SubFoo = 0,
+  Message40311_SubEnum_SubBar = 1,
 };
 
-GPBEnumDescriptor *Message30007_SubEnum_EnumDescriptor(void);
+GPBEnumDescriptor *Message40311_SubEnum_EnumDescriptor(void);
 
-BOOL Message30007_SubEnum_IsValidValue(int32_t value);
+BOOL Message40311_SubEnum_IsValidValue(int32_t value);
 
-GPB_FINAL @interface Test30007Root : GPBRootObject
+GPB_FINAL @interface Test40311Root : GPBRootObject
 @end
 
-@interface Test30007Root (DynamicMethods)
+@interface Test40311Root (DynamicMethods)
 + (GPBExtensionDescriptor *)otherM;
 + (GPBExtensionDescriptor *)otherE;
 + (GPBExtensionDescriptor *)otherMs;
 + (GPBExtensionDescriptor *)otherEs;
 @end
 
-typedef GPB_ENUM(Message30007_FieldNumber) {
-  Message30007_FieldNumber_Name = 1,
-  Message30007_FieldNumber_Value = 2,
-  Message30007_FieldNumber_NamesArray = 11,
-  Message30007_FieldNumber_ValuesArray = 12,
-  Message30007_FieldNumber_SubM = 20,
-  Message30007_FieldNumber_SubE = 21,
+typedef GPB_ENUM(Message40311_FieldNumber) {
+  Message40311_FieldNumber_Name = 1,
+  Message40311_FieldNumber_Value = 2,
+  Message40311_FieldNumber_NamesArray = 11,
+  Message40311_FieldNumber_ValuesArray = 12,
+  Message40311_FieldNumber_SubM = 20,
+  Message40311_FieldNumber_SubE = 21,
 };
 
-GPB_FINAL @interface Message30007 : GPBMessage
+GPB_FINAL @interface Message40311 : GPBMessage
 
 @property(nonatomic, readwrite, copy, null_resettable) NSString *name;
 @property(nonatomic, readwrite) BOOL hasName;
 
-@property(nonatomic, readwrite) Enum30007 value;
+@property(nonatomic, readwrite) Enum40311 value;
 @property(nonatomic, readwrite) BOOL hasValue;
 
 @property(nonatomic, readwrite, strong, null_resettable) NSMutableArray<NSString*> *namesArray;
 @property(nonatomic, readonly) NSUInteger namesArray_Count;
 
-// |valuesArray| contains |Enum30007|
 @property(nonatomic, readwrite, strong, null_resettable) GPBEnumArray *valuesArray;
 @property(nonatomic, readonly) NSUInteger valuesArray_Count;
 
-@property(nonatomic, readwrite, strong, null_resettable) Message30007_SubMessage *subM;
+@property(nonatomic, readwrite, strong, null_resettable) Message40311_SubMessage *subM;
 @property(nonatomic, readwrite) BOOL hasSubM;
 
-@property(nonatomic, readwrite) Message30007_SubEnum subE;
+@property(nonatomic, readwrite) Message40311_SubEnum subE;
 @property(nonatomic, readwrite) BOOL hasSubE;
 
 @end
 
-typedef GPB_ENUM(Message30007_SubMessage_FieldNumber) {
-  Message30007_SubMessage_FieldNumber_X = 1,
+typedef GPB_ENUM(Message40311_SubMessage_FieldNumber) {
+  Message40311_SubMessage_FieldNumber_X = 1,
 };
 
-GPB_FINAL @interface Message30007_SubMessage : GPBMessage
+GPB_FINAL @interface Message40311_SubMessage : GPBMessage
 
 @property(nonatomic, readwrite) int32_t x;
 @property(nonatomic, readwrite) BOOL hasX;
@@ -141,44 +143,43 @@ NS_ASSUME_NONNULL_END
 #pragma clang diagnostic ignored "-Wdeprecated-declarations"
 #pragma clang diagnostic ignored "-Wdollar-in-identifier-extension"
 
-GPBObjCClassDeclaration(Message30007);
-GPBObjCClassDeclaration(Message30007_SubMessage);
+GPBObjCClassDeclaration(Message40311);
+GPBObjCClassDeclaration(Message40311_SubMessage);
 
-@implementation Test30007Root
+@implementation Test40311Root
 
 + (GPBExtensionRegistry*)extensionRegistry {
   // This is called by +initialize so there is no need to worry
   // about thread safety and initialization of registry.
   static GPBExtensionRegistry* registry = nil;
   if (!registry) {
-    GPB_DEBUG_CHECK_RUNTIME_VERSIONS();
     registry = [[GPBExtensionRegistry alloc] init];
     static GPBExtensionDescription descriptions[] = {
       {
         .defaultValue.valueMessage = nil,
-        .singletonName = GPBStringifySymbol(Test30007Root) "_otherM",
-        .extendedClass.clazz = GPBObjCClass(Message30007),
-        .messageOrGroupClass.clazz = GPBObjCClass(Message30007),
+        .singletonName = GPBStringifySymbol(Test40311Root) "_otherM",
+        .extendedClass.clazz = GPBObjCClass(Message40311),
+        .messageOrGroupClass.clazz = GPBObjCClass(Message40311),
         .enumDescriptorFunc = NULL,
         .fieldNumber = 100,
         .dataType = GPBDataTypeMessage,
         .options = GPBExtensionNone,
       },
       {
-        .defaultValue.valueEnum = Enum30007_Foo,
-        .singletonName = GPBStringifySymbol(Test30007Root) "_otherE",
-        .extendedClass.clazz = GPBObjCClass(Message30007),
+        .defaultValue.valueEnum = Enum40311_Foo,
+        .singletonName = GPBStringifySymbol(Test40311Root) "_otherE",
+        .extendedClass.clazz = GPBObjCClass(Message40311),
         .messageOrGroupClass.clazz = Nil,
-        .enumDescriptorFunc = Enum30007_EnumDescriptor,
+        .enumDescriptorFunc = Enum40311_EnumDescriptor,
         .fieldNumber = 101,
         .dataType = GPBDataTypeEnum,
         .options = GPBExtensionNone,
       },
       {
         .defaultValue.valueMessage = nil,
-        .singletonName = GPBStringifySymbol(Test30007Root) "_otherMs",
-        .extendedClass.clazz = GPBObjCClass(Message30007),
-        .messageOrGroupClass.clazz = GPBObjCClass(Message30007),
+        .singletonName = GPBStringifySymbol(Test40311Root) "_otherMs",
+        .extendedClass.clazz = GPBObjCClass(Message40311),
+        .messageOrGroupClass.clazz = GPBObjCClass(Message40311),
         .enumDescriptorFunc = NULL,
         .fieldNumber = 110,
         .dataType = GPBDataTypeMessage,
@@ -186,10 +187,10 @@ GPBObjCClassDeclaration(Message30007_SubMessage);
       },
       {
         .defaultValue.valueMessage = nil,
-        .singletonName = GPBStringifySymbol(Test30007Root) "_otherEs",
-        .extendedClass.clazz = GPBObjCClass(Message30007),
+        .singletonName = GPBStringifySymbol(Test40311Root) "_otherEs",
+        .extendedClass.clazz = GPBObjCClass(Message40311),
         .messageOrGroupClass.clazz = Nil,
-        .enumDescriptorFunc = Enum30007_EnumDescriptor,
+        .enumDescriptorFunc = Enum40311_EnumDescriptor,
         .fieldNumber = 111,
         .dataType = GPBDataTypeEnum,
         .options = GPBExtensionRepeated,
@@ -198,7 +199,7 @@ GPBObjCClassDeclaration(Message30007_SubMessage);
     for (size_t i = 0; i < sizeof(descriptions) / sizeof(descriptions[0]); ++i) {
       GPBExtensionDescriptor *extension =
           [[GPBExtensionDescriptor alloc] initWithExtensionDescription:&descriptions[i]
-                                                         usesClassRefs:YES];
+                                                        runtimeSupport:&GOOGLE_PROTOBUF_OBJC_EXPECTED_GENCODE_VERSION_40311];
       [registry addExtension:extension];
       [self globallyRegisterExtension:extension];
       [extension release];
@@ -211,28 +212,27 @@ GPBObjCClassDeclaration(Message30007_SubMessage);
 
 @end
 
-static GPBFileDescription Test30007Root_FileDescription = {
+static GPBFilePackageAndPrefix Test40311Root_FileDescription = {
   .package = NULL,
-  .prefix = NULL,
-  .syntax = GPBFileSyntaxProto2
+  .prefix = NULL
 };
 
-GPBEnumDescriptor *Enum30007_EnumDescriptor(void) {
+GPBEnumDescriptor *Enum40311_EnumDescriptor(void) {
   static _Atomic(GPBEnumDescriptor*) descriptor = nil;
   if (!descriptor) {
-    GPB_DEBUG_CHECK_RUNTIME_VERSIONS();
     static const char *valueNames =
         "Foo\000Bar\000";
     static const int32_t values[] = {
-        Enum30007_Foo,
-        Enum30007_Bar,
+        Enum40311_Foo,
+        Enum40311_Bar,
     };
     GPBEnumDescriptor *worker =
-        [GPBEnumDescriptor allocDescriptorForName:GPBNSStringifySymbol(Enum30007)
+        [GPBEnumDescriptor allocDescriptorForName:GPBNSStringifySymbol(Enum40311)
+                                   runtimeSupport:&GOOGLE_PROTOBUF_OBJC_EXPECTED_GENCODE_VERSION_40311
                                        valueNames:valueNames
                                            values:values
                                             count:(uint32_t)(sizeof(values) / sizeof(int32_t))
-                                     enumVerifier:Enum30007_IsValidValue
+                                     enumVerifier:Enum40311_IsValidValue
                                             flags:GPBEnumDescriptorInitializationFlag_IsClosed];
     GPBEnumDescriptor *expected = nil;
     if (!atomic_compare_exchange_strong(&descriptor, &expected, worker)) {
@@ -242,32 +242,32 @@ GPBEnumDescriptor *Enum30007_EnumDescriptor(void) {
   return descriptor;
 }
 
-BOOL Enum30007_IsValidValue(int32_t value__) {
+BOOL Enum40311_IsValidValue(int32_t value__) {
   switch (value__) {
-    case Enum30007_Foo:
-    case Enum30007_Bar:
+    case Enum40311_Foo:
+    case Enum40311_Bar:
       return YES;
     default:
       return NO;
   }
 }
 
-GPBEnumDescriptor *Message30007_SubEnum_EnumDescriptor(void) {
+GPBEnumDescriptor *Message40311_SubEnum_EnumDescriptor(void) {
   static _Atomic(GPBEnumDescriptor*) descriptor = nil;
   if (!descriptor) {
-    GPB_DEBUG_CHECK_RUNTIME_VERSIONS();
     static const char *valueNames =
         "SubFoo\000SubBar\000";
     static const int32_t values[] = {
-        Message30007_SubEnum_SubFoo,
-        Message30007_SubEnum_SubBar,
+        Message40311_SubEnum_SubFoo,
+        Message40311_SubEnum_SubBar,
     };
     GPBEnumDescriptor *worker =
-        [GPBEnumDescriptor allocDescriptorForName:GPBNSStringifySymbol(Message30007_SubEnum)
+        [GPBEnumDescriptor allocDescriptorForName:GPBNSStringifySymbol(Message40311_SubEnum)
+                                   runtimeSupport:&GOOGLE_PROTOBUF_OBJC_EXPECTED_GENCODE_VERSION_40311
                                        valueNames:valueNames
                                            values:values
                                             count:(uint32_t)(sizeof(values) / sizeof(int32_t))
-                                     enumVerifier:Message30007_SubEnum_IsValidValue
+                                     enumVerifier:Message40311_SubEnum_IsValidValue
                                             flags:GPBEnumDescriptorInitializationFlag_IsClosed];
     GPBEnumDescriptor *expected = nil;
     if (!atomic_compare_exchange_strong(&descriptor, &expected, worker)) {
@@ -277,17 +277,17 @@ GPBEnumDescriptor *Message30007_SubEnum_EnumDescriptor(void) {
   return descriptor;
 }
 
-BOOL Message30007_SubEnum_IsValidValue(int32_t value__) {
+BOOL Message40311_SubEnum_IsValidValue(int32_t value__) {
   switch (value__) {
-    case Message30007_SubEnum_SubFoo:
-    case Message30007_SubEnum_SubBar:
+    case Message40311_SubEnum_SubFoo:
+    case Message40311_SubEnum_SubBar:
       return YES;
     default:
       return NO;
   }
 }
 
-@implementation Message30007
+@implementation Message40311
 
 @dynamic hasName, name;
 @dynamic hasValue, value;
@@ -296,84 +296,84 @@ BOOL Message30007_SubEnum_IsValidValue(int32_t value__) {
 @dynamic hasSubM, subM;
 @dynamic hasSubE, subE;
 
-typedef struct Message30007__storage_ {
+typedef struct Message40311__storage_ {
   uint32_t _has_storage_[1];
-  Enum30007 value;
-  Message30007_SubEnum subE;
+  Enum40311 value;
+  Message40311_SubEnum subE;
   NSString *name;
   NSMutableArray *namesArray;
   GPBEnumArray *valuesArray;
-  Message30007_SubMessage *subM;
-} Message30007__storage_;
+  Message40311_SubMessage *subM;
+} Message40311__storage_;
 
 + (GPBDescriptor *)descriptor {
   static GPBDescriptor *descriptor = nil;
   if (!descriptor) {
-    GPB_DEBUG_CHECK_RUNTIME_VERSIONS();
     static GPBMessageFieldDescription fields[] = {
       {
         .name = "name",
         .dataTypeSpecific.clazz = Nil,
-        .number = Message30007_FieldNumber_Name,
+        .number = Message40311_FieldNumber_Name,
         .hasIndex = 0,
-        .offset = (uint32_t)offsetof(Message30007__storage_, name),
-        .flags = GPBFieldOptional,
+        .offset = (uint32_t)offsetof(Message40311__storage_, name),
+        .flags = GPBFieldNone,
         .dataType = GPBDataTypeString,
       },
       {
         .name = "value",
-        .dataTypeSpecific.enumDescFunc = Enum30007_EnumDescriptor,
-        .number = Message30007_FieldNumber_Value,
+        .dataTypeSpecific.enumDescFunc = Enum40311_EnumDescriptor,
+        .number = Message40311_FieldNumber_Value,
         .hasIndex = 1,
-        .offset = (uint32_t)offsetof(Message30007__storage_, value),
-        .flags = (GPBFieldFlags)(GPBFieldOptional | GPBFieldHasEnumDescriptor | GPBFieldClosedEnum),
+        .offset = (uint32_t)offsetof(Message40311__storage_, value),
+        .flags = GPBFieldNone,
         .dataType = GPBDataTypeEnum,
       },
       {
         .name = "namesArray",
         .dataTypeSpecific.clazz = Nil,
-        .number = Message30007_FieldNumber_NamesArray,
+        .number = Message40311_FieldNumber_NamesArray,
         .hasIndex = GPBNoHasBit,
-        .offset = (uint32_t)offsetof(Message30007__storage_, namesArray),
+        .offset = (uint32_t)offsetof(Message40311__storage_, namesArray),
         .flags = GPBFieldRepeated,
         .dataType = GPBDataTypeString,
       },
       {
         .name = "valuesArray",
-        .dataTypeSpecific.enumDescFunc = Enum30007_EnumDescriptor,
-        .number = Message30007_FieldNumber_ValuesArray,
+        .dataTypeSpecific.enumDescFunc = Enum40311_EnumDescriptor,
+        .number = Message40311_FieldNumber_ValuesArray,
         .hasIndex = GPBNoHasBit,
-        .offset = (uint32_t)offsetof(Message30007__storage_, valuesArray),
-        .flags = (GPBFieldFlags)(GPBFieldRepeated | GPBFieldHasEnumDescriptor | GPBFieldClosedEnum),
+        .offset = (uint32_t)offsetof(Message40311__storage_, valuesArray),
+        .flags = GPBFieldRepeated,
         .dataType = GPBDataTypeEnum,
       },
       {
         .name = "subM",
-        .dataTypeSpecific.clazz = GPBObjCClass(Message30007_SubMessage),
-        .number = Message30007_FieldNumber_SubM,
+        .dataTypeSpecific.clazz = GPBObjCClass(Message40311_SubMessage),
+        .number = Message40311_FieldNumber_SubM,
         .hasIndex = 2,
-        .offset = (uint32_t)offsetof(Message30007__storage_, subM),
-        .flags = GPBFieldOptional,
+        .offset = (uint32_t)offsetof(Message40311__storage_, subM),
+        .flags = GPBFieldNone,
         .dataType = GPBDataTypeMessage,
       },
       {
         .name = "subE",
-        .dataTypeSpecific.enumDescFunc = Message30007_SubEnum_EnumDescriptor,
-        .number = Message30007_FieldNumber_SubE,
+        .dataTypeSpecific.enumDescFunc = Message40311_SubEnum_EnumDescriptor,
+        .number = Message40311_FieldNumber_SubE,
         .hasIndex = 3,
-        .offset = (uint32_t)offsetof(Message30007__storage_, subE),
-        .flags = (GPBFieldFlags)(GPBFieldOptional | GPBFieldHasEnumDescriptor | GPBFieldClosedEnum),
+        .offset = (uint32_t)offsetof(Message40311__storage_, subE),
+        .flags = GPBFieldNone,
         .dataType = GPBDataTypeEnum,
       },
     };
     GPBDescriptor *localDescriptor =
-        [GPBDescriptor allocDescriptorForClass:GPBObjCClass(Message30007)
-                                   messageName:@"Message30007"
-                               fileDescription:&Test30007Root_FileDescription
+        [GPBDescriptor allocDescriptorForClass:GPBObjCClass(Message40311)
+                                   messageName:@"Message40311"
+                                runtimeSupport:&GOOGLE_PROTOBUF_OBJC_EXPECTED_GENCODE_VERSION_40311
+                               fileDescription:&Test40311Root_FileDescription
                                         fields:fields
                                     fieldCount:(uint32_t)(sizeof(fields) / sizeof(GPBMessageFieldDescription))
-                                   storageSize:sizeof(Message30007__storage_)
-                                         flags:(GPBDescriptorInitializationFlags)(GPBDescriptorInitializationFlag_UsesClassRefs | GPBDescriptorInitializationFlag_Proto3OptionalKnown | GPBDescriptorInitializationFlag_ClosedEnumSupportKnown)];
+                                   storageSize:sizeof(Message40311__storage_)
+                                         flags:GPBDescriptorInitializationFlag_None];
     static const GPBExtensionRange ranges[] = {
       { .start = 100, .end = 536870912 },
     };
@@ -389,39 +389,41 @@ typedef struct Message30007__storage_ {
 
 @end
 
-@implementation Message30007_SubMessage
+@implementation Message40311_SubMessage
 
 @dynamic hasX, x;
 
-typedef struct Message30007_SubMessage__storage_ {
+typedef struct Message40311_SubMessage__storage_ {
   uint32_t _has_storage_[1];
   int32_t x;
-} Message30007_SubMessage__storage_;
+} Message40311_SubMessage__storage_;
 
+// This method is threadsafe because it is initially called
+// in +initialize for each subclass.
 + (GPBDescriptor *)descriptor {
   static GPBDescriptor *descriptor = nil;
   if (!descriptor) {
-    GPB_DEBUG_CHECK_RUNTIME_VERSIONS();
     static GPBMessageFieldDescription fields[] = {
       {
         .name = "x",
         .dataTypeSpecific.clazz = Nil,
-        .number = Message30007_SubMessage_FieldNumber_X,
+        .number = Message40311_SubMessage_FieldNumber_X,
         .hasIndex = 0,
-        .offset = (uint32_t)offsetof(Message30007_SubMessage__storage_, x),
-        .flags = GPBFieldOptional,
+        .offset = (uint32_t)offsetof(Message40311_SubMessage__storage_, x),
+        .flags = GPBFieldNone,
         .dataType = GPBDataTypeInt32,
       },
     };
     GPBDescriptor *localDescriptor =
-        [GPBDescriptor allocDescriptorForClass:GPBObjCClass(Message30007_SubMessage)
+        [GPBDescriptor allocDescriptorForClass:GPBObjCClass(Message40311_SubMessage)
                                    messageName:@"SubMessage"
-                               fileDescription:&Test30007Root_FileDescription
+                                runtimeSupport:&GOOGLE_PROTOBUF_OBJC_EXPECTED_GENCODE_VERSION_40311
+                               fileDescription:&Test40311Root_FileDescription
                                         fields:fields
                                     fieldCount:(uint32_t)(sizeof(fields) / sizeof(GPBMessageFieldDescription))
-                                   storageSize:sizeof(Message30007_SubMessage__storage_)
-                                         flags:(GPBDescriptorInitializationFlags)(GPBDescriptorInitializationFlag_UsesClassRefs | GPBDescriptorInitializationFlag_Proto3OptionalKnown | GPBDescriptorInitializationFlag_ClosedEnumSupportKnown)];
-    [localDescriptor setupContainingMessageClass:GPBObjCClass(Message30007)];
+                                   storageSize:sizeof(Message40311_SubMessage__storage_)
+                                         flags:GPBDescriptorInitializationFlag_None];
+    [localDescriptor setupContainingMessageClass:GPBObjCClass(Message40311)];
     #if defined(DEBUG) && DEBUG
       NSAssert(descriptor == nil, @"Startup recursed!");
     #endif  // DEBUG
@@ -439,16 +441,16 @@ typedef struct Message30007_SubMessage__storage_ {
 
 // -------------------------------------------------------------------------------------------------
 
-@implementation Message30007FormatTest
+@implementation Message40311FormatTest
 
-- (void)test30007MessageFormat {
+- (void)test40311MessageFormat {
   // This doesn't test everything, just exists to ensure the code compiles/links and seems
   // to work.
-  Message30007 *message = [Message30007 message];
+  Message40311 *message = [Message40311 message];
   message.name = @"foo";
   message.subM.x = 123;
 }
 
 @end
 
-#endif  // GOOGLE_PROTOBUF_OBJC_MIN_SUPPORTED_VERSION > 30007
+#endif  // GOOGLE_PROTOBUF_OBJC_MIN_SUPPORTED_VERSION > 40311
