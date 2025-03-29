@@ -374,6 +374,7 @@ set(libprotoc_srcs
   ${protobuf_SOURCE_DIR}/src/google/protobuf/compiler/cpp/helpers.cc
   ${protobuf_SOURCE_DIR}/src/google/protobuf/compiler/cpp/ifndef_guard.cc
   ${protobuf_SOURCE_DIR}/src/google/protobuf/compiler/cpp/message.cc
+  ${protobuf_SOURCE_DIR}/src/google/protobuf/compiler/cpp/message_layout_helper.cc
   ${protobuf_SOURCE_DIR}/src/google/protobuf/compiler/cpp/namespace_printer.cc
   ${protobuf_SOURCE_DIR}/src/google/protobuf/compiler/cpp/padding_optimizer.cc
   ${protobuf_SOURCE_DIR}/src/google/protobuf/compiler/cpp/parse_function_generator.cc
@@ -1055,7 +1056,9 @@ set(protoc-gen-upbdefs_srcs
   ${protobuf_SOURCE_DIR}/upb_generator/minitable/names_internal.cc
   ${protobuf_SOURCE_DIR}/upb_generator/plugin.cc
   ${protobuf_SOURCE_DIR}/upb_generator/reflection/generator.cc
+  ${protobuf_SOURCE_DIR}/upb_generator/reflection/header.cc
   ${protobuf_SOURCE_DIR}/upb_generator/reflection/names.cc
+  ${protobuf_SOURCE_DIR}/upb_generator/reflection/source.cc
 )
 
 # @//pkg:protoc-gen-upbdefs

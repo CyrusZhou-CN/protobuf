@@ -35,6 +35,10 @@ struct MicroStringTestPeer;
 //            class. They require no memory allocation.
 //            This representation holds the size in the first (lsb) byte (left
 //            shifted to allow for tags) and the rest of the bytes are the data.
+//            The inline buffer can span beyond the `MicroString` class (see
+//            `MicroStringExtra` below). To support this most operations take
+//            the `inline_capacity` dynamically so that `MicroStringExtra` and
+//            the runtime can pass the real buffer size.
 //  - MicroRep: Cheapest out of line representation. It is two `uint8_t` for
 //              capacity and size, then the char buffer.
 //  - LargeRep: The following representations use LargeRep as the header,
@@ -67,25 +71,38 @@ class PROTOBUF_EXPORT MicroString {
     uint32_t size;
     // One of LargeRepKind, or the capacity for the owned buffer.
     uint32_t capacity;
+
+    absl::string_view view() const { return {payload, size}; }
+    char* owned_head() {
+      ABSL_DCHECK_GE(capacity, kOwned);
+      return reinterpret_cast<char*>(this + 1);
+    }
   };
 
  public:
+  // For the platforms supported, the inline representation will have an inline
+  // buffer that allows storing very small strings without allocating any
+  // memory.
+  // For other platforms, the "inline" representation will only support the
+  // empty case.
 #if defined(ABSL_IS_LITTLE_ENDIAN)
-  static constexpr bool kHasInlineRep = sizeof(uintptr_t) >= 8;
+  static constexpr bool kHasInlineBuffer = true;
 #else
-  // For now, disable the inline rep if not in little endian.
+  // For now, disable the inline buffer if not in little endian.
   // We can revisit this later if performance in such platforms is relevant.
   // Note that MicroStringExtra depends on LITTLE_ENDIAN to put the extra bytes
   // contiguously with the bytes from the base.
-  static constexpr bool kHasInlineRep = false;
+  static constexpr bool kHasInlineBuffer = false;
 #endif
 
   static constexpr size_t kInlineCapacity =
-      kHasInlineRep ? sizeof(uintptr_t) - 1 : 0;
+      kHasInlineBuffer ? sizeof(uintptr_t) - 1 : 0;
   static constexpr size_t kMaxMicroRepCapacity = 255;
 
   // Empty string.
   constexpr MicroString() : rep_() {}
+
+  explicit MicroString(Arena*) : MicroString() {}
 
   MicroString(Arena* arena, const MicroString& other)
       : MicroString(FromOtherTag{}, other, arena) {}
@@ -104,14 +121,35 @@ class PROTOBUF_EXPORT MicroString {
     // but works during constant evaluation.
     char for_tag[1];
   };
-  explicit constexpr MicroString(const UnownedPayload& unowned)
-      : rep_(const_cast<char*>(unowned.for_tag + kIsLargeRepTag)) {}
+  explicit constexpr MicroString(const UnownedPayload& unowned_input)
+      : rep_(const_cast<char*>(unowned_input.for_tag + kIsLargeRepTag)) {}
+
+  // Resets value to the default constructor state.
+  // Disregards initial value of rep_ (so this is the *ONLY* safe method to call
+  // after construction or when reinitializing after becoming the active field
+  // in a oneof union).
+  void InitDefault() { rep_ = nullptr; }
 
   // Destroys the payload.
   // REQUIRES: no arenas. Trying to destroy a string constructed with arenas is
   // invalid and there is no checking for it.
   void Destroy() {
     if (!is_inline()) DestroySlow();
+  }
+
+  // Resets the object to the empty string.
+  // Does not necessarily release any memory.
+  void Clear() {
+    if (is_inline()) {
+      if (kHasInlineBuffer) {
+        set_inline_size(0);
+      } else {
+        // Nothing to do. Already empty.
+        ABSL_DCHECK(Get().empty());
+      }
+      return;
+    }
+    ClearSlow();
   }
 
   // Sets the payload to `other`. Copy behavior depends on the kind of payload.
@@ -159,7 +197,30 @@ class PROTOBUF_EXPORT MicroString {
 
   // Set the payload to `unowned`. Will not allocate memory, but might free
   // memory if already set.
-  void SetUnowned(const UnownedPayload& unowned, Arena* arena);
+  void SetUnowned(const UnownedPayload& unowned_input, Arena* arena);
+
+  // Set the string, but the input comes in individual chunks.
+  // This function is designed to be called from the parser.
+  // `size` is the expected total size of the string. It is ok to append fewer
+  // bytes than `size`, but never more. The final size of the string will be
+  // whatever was appended to it.
+  // `size` is used as a hint to reserve space, but the implementation might
+  // decide not to do so for very large values and just grow on append.
+  //
+  // The `setter` callback is passed an `append` callback that it can use to
+  // append the chunks one by one.
+  // Eg
+  //
+  // str.SetInChunks(10, arena, [](auto append) {
+  //   append("12345");
+  //   append("67890");
+  // });
+  //
+  // The callback approach reduces the dispatch overhead to be done only once
+  // instead of on each append call.
+  template <typename F>
+  void SetInChunks(size_t size, Arena* arena, F setter,
+                   size_t inline_capacity = kInlineCapacity);
 
   // The capacity for write access of this string.
   // It can be 0 if the payload is not writable. For example, aliased buffers.
@@ -168,16 +229,14 @@ class PROTOBUF_EXPORT MicroString {
   size_t SpaceUsedExcludingSelfLong() const;
 
   absl::string_view Get() const {
-    if (!kHasInlineRep && rep_ == nullptr) {
+    if (!kHasInlineBuffer && rep_ == nullptr) {
       return absl::string_view();
     } else if (is_micro_rep()) {
-      auto* h = micro_rep();
-      return absl::string_view(h->data(), h->size);
+      return micro_rep()->view();
     } else if (is_inline()) {
-      return absl::string_view(inline_head(), inline_size());
+      return inline_view();
     } else {
-      auto* h = large_rep();
-      return absl::string_view(h->payload, h->size);
+      return large_rep()->view();
     }
   }
 
@@ -190,13 +249,30 @@ class PROTOBUF_EXPORT MicroString {
                                    kUnowned}};
   }
 
+  void InternalSwap(MicroString* other,
+                    size_t inline_capacity = kInlineCapacity) {
+    if (kHasInlineBuffer) {
+      std::swap_ranges(reinterpret_cast<char*>(this),
+                       reinterpret_cast<char*>(this) + inline_capacity + 1,
+                       reinterpret_cast<char*>(other));
+    } else {
+      ABSL_DCHECK_EQ(inline_capacity, size_t{0});
+      std::swap(rep_, other->rep_);
+    }
+  }
+
  protected:
   friend MicroStringTestPeer;
 
   struct StringRep : LargeRep {
     std::string str;
+    void ResetBase() {
+      payload = str.data();
+      size = str.size();
+    }
   };
 
+  static_assert(alignof(void*) >= 4, "We need two tag bits from pointers.");
   static constexpr uintptr_t kIsLargeRepTag = 0x1;
   static_assert(sizeof(UnownedPayload::for_tag) == kIsLargeRepTag,
                 "See comment in for_tag declaration above.");
@@ -229,6 +305,8 @@ class PROTOBUF_EXPORT MicroString {
     uint8_t size;
     uint8_t capacity;
     char* data() { return reinterpret_cast<char*>(this + 1); }
+    const char* data() const { return reinterpret_cast<const char*>(this + 1); }
+    absl::string_view view() const { return {data(), size}; }
   };
   // Micro-optimization: by using kIsMicroRepTag as 2, the MicroRep `rep_`
   // pointer (with the tag) is already pointing into the data buffer.
@@ -274,7 +352,7 @@ class PROTOBUF_EXPORT MicroString {
     return static_cast<uint8_t>(reinterpret_cast<uintptr_t>(rep_)) >> kTagShift;
   }
   void set_inline_size(size_t size) {
-    ABSL_DCHECK(kHasInlineRep);
+    ABSL_DCHECK(kHasInlineBuffer);
     size <<= kTagShift;
     PROTOBUF_ASSUME(size <= 0xFF);
     // Only overwrite the size byte to avoid clobbering the char bytes in case
@@ -291,6 +369,9 @@ class PROTOBUF_EXPORT MicroString {
     ABSL_DCHECK(is_inline());
     return reinterpret_cast<const char*>(&rep_) + 1;
   }
+  absl::string_view inline_view() const {
+    return {inline_head(), inline_size()};
+  }
 
   // These are templates so that they can implement the logic for the derived
   // types too. We need the full type to do the assignment properly.
@@ -302,7 +383,7 @@ class PROTOBUF_EXPORT MicroString {
       return;
     }
     // Init as empty and run the slow path.
-    rep_ = nullptr;
+    InitDefault();
     SetFromOtherSlow(other, arena, Self::kInlineCapacity);
   }
 
@@ -326,16 +407,18 @@ class PROTOBUF_EXPORT MicroString {
   void SetFromOtherSlow(const MicroString& other, Arena* arena,
                         size_t inline_capacity);
 
+  void ClearSlow();
+
   template <typename Self>
   static void SetMaybeConstant(Self& self, absl::string_view data,
                                Arena* arena) {
     const size_t size = data.size();
     if (PROTOBUF_BUILTIN_CONSTANT_P(size <= Self::kInlineCapacity) &&
         size <= Self::kInlineCapacity && self.is_inline()) {
-      if (!Self::kHasInlineRep) {
+      if (!Self::kHasInlineBuffer) {
         // We can only come here if the value is inline-empty and the input is
         // empty, so nothing to do.
-        ABSL_DCHECK_EQ(size, 0);
+        ABSL_DCHECK_EQ(size, size_t{0});
         ABSL_DCHECK_EQ(self.rep_, nullptr);
         return;
       }
@@ -343,7 +426,9 @@ class PROTOBUF_EXPORT MicroString {
       // writes better. We do a single write to memory on the assingment below.
       Self tmp;
       tmp.set_inline_size(size);
-      memcpy(tmp.inline_head(), data.data(), data.size());
+      if (size != 0) {
+        memcpy(tmp.inline_head(), data.data(), data.size());
+      }
       self = tmp;
       return;
     }
@@ -353,25 +438,116 @@ class PROTOBUF_EXPORT MicroString {
 
   void DestroySlow();
 
+  // Allocate the corresponding rep, and sets its capacity.
+  // The actual capacity might be larger than the requested one.
+  // The size and data bytes are uninitialized.
+  // rep_ is updated to point to the new rep without any cleanup of the old
+  // value.
+  MicroRep* AllocateMicroRep(size_t capacity, Arena* arena);
+  LargeRep* AllocateOwnedRep(size_t capacity, Arena* arena);
+  StringRep* AllocateStringRep(Arena* arena);
+
   void* rep_;
 };
 
+template <typename F>
+void MicroString::SetInChunks(size_t size, Arena* arena, F setter,
+                              size_t inline_capacity) {
+  const auto invoke_setter = [&](char* p) {
+    char* start = p;
+    setter([&](absl::string_view chunk) {
+      ABSL_DCHECK_LE(p - start + chunk.size(), size);
+      memcpy(p, chunk.data(), chunk.size());
+      p += chunk.size();
+    });
+    return p - start;
+  };
+
+  const auto do_inline = [&] {
+    ABSL_DCHECK_LE(size, inline_capacity);
+    set_inline_size(invoke_setter(inline_head()));
+  };
+
+  const auto do_micro = [&](MicroRep* r) {
+    ABSL_DCHECK_LE(size, r->capacity);
+    r->size = invoke_setter(r->data());
+  };
+
+  const auto do_owned = [&](LargeRep* r) {
+    ABSL_DCHECK_LE(size, r->capacity);
+    r->size = invoke_setter(r->owned_head());
+  };
+
+  const auto do_string = [&](StringRep* r) {
+    r->str.clear();
+    setter([&](absl::string_view chunk) {
+      r->str.append(chunk.data(), chunk.size());
+    });
+    r->ResetBase();
+  };
+
+  if (is_inline()) {
+    if (size <= inline_capacity) {
+      return do_inline();
+    }
+  } else if (is_micro_rep()) {
+    if (auto* r = micro_rep(); size <= r->capacity) {
+      return do_micro(r);
+    }
+  } else if (is_large_rep()) {
+    switch (large_rep_kind()) {
+      case kOwned:
+        if (auto* r = large_rep(); size <= r->capacity) {
+          return do_owned(r);
+        }
+        break;
+      case kString:
+        return do_string(string_rep());
+      case kAlias:
+      case kUnowned:
+        break;
+    }
+  }
+
+  // Copied from ParseContext as an acceptable size that we can preallocate
+  // without verifying.
+  static constexpr size_t kSafeStringSize = 50000000;
+
+  // We didn't have space for it, so allocate the space and dispatch.
+  if (arena == nullptr) Destroy();
+
+  if (size <= inline_capacity) {
+    set_inline_size(0);
+    do_inline();
+  } else if (size <= kMaxMicroRepCapacity) {
+    do_micro(AllocateMicroRep(size, arena));
+  } else if (size <= kSafeStringSize) {
+    do_owned(AllocateOwnedRep(size, arena));
+  } else {
+    // Fallback to using std::string and normal growth instead of reserving.
+    do_string(AllocateStringRep(arena));
+  }
+}
+
 template <size_t RequestedSpace>
 class MicroStringExtraImpl : private MicroString {
+  static constexpr size_t RoundUp(size_t n) {
+    return (n + (alignof(MicroString) - 1)) & ~(alignof(MicroString) - 1);
+  }
+
  public:
   // Round up to avoid padding
   static constexpr size_t kInlineCapacity =
-      ((RequestedSpace - MicroString::kInlineCapacity + 7) & ~7) +
-      MicroString::kInlineCapacity;
+      RoundUp(RequestedSpace + /* inline_size */ 1) - /* inline_size */ 1;
 
   static_assert(kInlineCapacity < MicroString::kMaxInlineCapacity,
                 "Must fit with the tags.");
 
   constexpr MicroStringExtraImpl() {
-    // Some compilers don't like to assert kHasInlineRep directly, so make the
-    // expression dependent.
+    // Some compilers don't like to assert kHasInlineBuffer directly, so make
+    // the expression dependent.
     static_assert(static_cast<int>(RequestedSpace != 0) &
-                  static_cast<int>(MicroString::kHasInlineRep));
+                  static_cast<int>(MicroString::kHasInlineBuffer));
   }
   MicroStringExtraImpl(Arena* arena, const MicroStringExtraImpl& other)
       : MicroString(FromOtherTag{}, other, arena) {}
@@ -404,6 +580,10 @@ class MicroStringExtraImpl : private MicroString {
     return is_inline() ? kInlineCapacity : MicroString::Capacity();
   }
 
+  void InternalSwap(MicroStringExtraImpl* other) {
+    MicroString::InternalSwap(other, kInlineCapacity);
+  }
+
   using MicroString::SpaceUsedExcludingSelfLong;
 
  private:
@@ -423,7 +603,7 @@ class MicroStringExtraImpl : private MicroString {
 // It could be rouneded up to prevent padding.
 template <size_t InlineCapacity>
 using MicroStringExtra =
-    std::conditional_t<(!MicroString::kHasInlineRep ||
+    std::conditional_t<(!MicroString::kHasInlineBuffer ||
                         InlineCapacity <= MicroString::kInlineCapacity),
                        MicroString, MicroStringExtraImpl<InlineCapacity>>;
 

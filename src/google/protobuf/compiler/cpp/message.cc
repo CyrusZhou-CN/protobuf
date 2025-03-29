@@ -2683,12 +2683,12 @@ size_t MessageGenerator::GenerateOffsets(io::Printer* p) {
     // offset.
 
     if (ShouldSplit(field, options_)) {
-      format(" | ::_pbi::kSplitFieldOffsetMask /*split*/");
+      format(" | ::_pbi::kSplitFieldOffsetMask");
     }
     if (IsEagerlyVerifiedLazy(field, options_, scc_analyzer_)) {
-      format(" | 0x1u /*eagerly verified lazy*/");
+      format(" | ::_pbi::kLazyMask");
     } else if (IsStringInlined(field, options_)) {
-      format(" | 0x1u /*inlined*/");
+      format(" | ::_pbi::kInlinedMask");
     }
     format(",\n");
   }
@@ -4183,10 +4183,9 @@ void MessageGenerator::GenerateClassData(io::Printer* p) {
             };
           }
 
-          PROTOBUF_CONSTINIT$ dllexport_decl$
-              PROTOBUF_ATTRIBUTE_INIT_PRIORITY1 const $pbi$::ClassDataFull
-                  $classname$_class_data_ =
-                      $classname$::InternalGenerateClassData_();
+          PROTOBUF_CONSTINIT PROTOBUF_ATTRIBUTE_INIT_PRIORITY1 const
+              $pbi$::ClassDataFull $classname$_class_data_ =
+                  $classname$::InternalGenerateClassData_();
 
           const $pbi$::ClassData* $nonnull$ $classname$::GetClassData() const {
             $pin_weak_descriptor$;

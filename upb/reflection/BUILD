@@ -36,7 +36,7 @@ bootstrap_upb_proto_library(
 
 upb_proto_reflection_library(
     name = "descriptor_upb_proto_reflection",
-    visibility = ["//upb:friends"],
+    visibility = ["//visibility:private"],
     deps = ["//:descriptor_proto"],
 )
 
@@ -146,7 +146,7 @@ bootstrap_cc_library(
 )
 
 cc_library(
-    name = "generated_reflection_support__only_for_generated_code_do_not_use__i_give_permission_to_break_me",
+    name = "generated_reflection_support",
     hdrs = [
         "def.h",
         "internal/def_pool.h",
@@ -155,7 +155,7 @@ cc_library(
     textual_hdrs = [
         "//upb:port_inc",
     ],
-    visibility = ["//visibility:public"],
+    visibility = ["//upb:__pkg__"],
     deps = [
         ":internal",
         "//upb:mem",
