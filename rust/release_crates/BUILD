@@ -7,7 +7,7 @@ filegroup(
         "//rust/release_crates/protobuf_codegen:protobuf_codegen_crate",
         "//rust/release_crates/protobuf_example:protobuf_example_crate",
         "//rust/release_crates/protobuf_macros:protobuf_macros_crate",
-        "//rust/release_crates/protobuf_well_known_types:crate",
+        "//rust/release_crates/protobuf_well_known_types:protobuf_well_known_types_crate",
     ],
     visibility = ["//rust:__pkg__"],
 )
@@ -16,17 +16,6 @@ filegroup(
 sh_binary(
     name = "cargo_test",
     srcs = ["cargo_test.sh"],
-    data = [
-        ":crates",
-        "//:protoc",
-    ],
-    tags = ["manual"],
-    deps = ["@bazel_tools//tools/bash/runfiles"],
-)
-
-sh_binary(
-    name = "publish_release",
-    srcs = ["publish_release.sh"],
     data = [
         ":crates",
         "//:protoc",

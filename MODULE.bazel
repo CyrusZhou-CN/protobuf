@@ -140,19 +140,30 @@ crate.spec(
     package = "paste",
     version = ">=1",
 )
+crate.spec(
+    package = "quote",
+    version = ">=1",
+)
+crate.spec(
+    package = "syn",
+    version = ">=2",
+)
 crate.from_specs()
 use_repo(crate, crate_index = "crates")
+
+PROTOBUF_MAVEN_ARTIFACTS = [
+    "com.google.code.findbugs:jsr305:3.0.2",
+    "com.google.code.gson:gson:2.8.9",
+    "com.google.errorprone:error_prone_annotations:2.5.1",
+    "com.google.j2objc:j2objc-annotations:2.8",
+    "com.google.guava:guava:32.0.1-jre",
+]
 
 protobuf_maven = use_extension("@rules_jvm_external//:extensions.bzl", "maven")
 protobuf_maven.install(
     name = "protobuf_maven",
-    artifacts = [
-        "com.google.code.findbugs:jsr305:3.0.2",
-        "com.google.code.gson:gson:2.8.9",
-        "com.google.errorprone:error_prone_annotations:2.5.1",
-        "com.google.j2objc:j2objc-annotations:2.8",
-        "com.google.guava:guava:32.0.1-jre",
-    ],
+    artifacts = PROTOBUF_MAVEN_ARTIFACTS,
+    lock_file = "//:maven_install.json",
     repositories = [
         "https://repo1.maven.org/maven2",
         "https://repo.maven.apache.org/maven2",
@@ -164,7 +175,7 @@ use_repo(protobuf_maven, "protobuf_maven")
 protobuf_maven_dev = use_extension("@rules_jvm_external//:extensions.bzl", "maven", dev_dependency = True)
 protobuf_maven_dev.install(
     name = "protobuf_maven_dev",
-    artifacts = [
+    artifacts = PROTOBUF_MAVEN_ARTIFACTS + [
         "com.google.caliper:caliper:1.0-beta-3",
         "com.google.guava:guava-testlib:32.0.1-jre",
         "com.google.testparameterinjector:test-parameter-injector:1.18",
@@ -174,6 +185,7 @@ protobuf_maven_dev.install(
         "biz.aQute.bnd:biz.aQute.bndlib:6.4.0",
         "info.picocli:picocli:4.6.3",
     ],
+    lock_file = "//:maven_dev_install.json",
     repositories = [
         "https://repo1.maven.org/maven2",
         "https://repo.maven.apache.org/maven2",
@@ -183,7 +195,7 @@ use_repo(protobuf_maven_dev, "protobuf_maven_dev")
 
 bazel_dep(name = "googletest", version = "1.15.2", dev_dependency = True)
 bazel_dep(name = "rules_buf", version = "0.3.0", dev_dependency = True)
-bazel_dep(name = "rules_testing", version = "0.6.0", dev_dependency = True)
+bazel_dep(name = "rules_testing", version = "0.8.0", dev_dependency = True)
 bazel_dep(
     name = "abseil-py",
     version = "2.1.0",
@@ -197,3 +209,5 @@ use_repo(cc_configure, "local_config_cc")
 
 # rules_proto are needed for @com_google_protobuf_v25.0 used in //compatibility/... tests
 bazel_dep(name = "rules_proto", version = "7.0.2", dev_dependency = True)
+
+bazel_dep(name = "lua", version = "5.4.6", dev_dependency = True)
