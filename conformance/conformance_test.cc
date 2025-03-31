@@ -219,6 +219,7 @@ ConformanceTestSuite::ConformanceRequestSetting::ConformanceRequestSetting(
     default:
       ABSL_LOG(FATAL) << "Unspecified input format";
   }
+  request_.set_internal_test_name(test_name);
 
   request_.set_test_category(test_category);
 

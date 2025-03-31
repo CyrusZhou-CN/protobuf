@@ -43,6 +43,7 @@
 #include "absl/base/thread_annotations.h"
 #include "absl/cleanup/cleanup.h"
 #include "absl/container/btree_map.h"
+#include "absl/container/btree_set.h"
 #include "absl/container/flat_hash_map.h"
 #include "absl/container/flat_hash_set.h"
 #include "absl/functional/function_ref.h"
@@ -7749,13 +7750,43 @@ void DescriptorBuilder::CrossLinkField(FieldDescriptor* field,
                      conflicting_field->full_name());
                });
     } else {
+      absl::btree_set<std::pair<int64_t, int64_t>> fields_used;
+      auto* parent = field->containing_type();
+      for (int i = 0; i < parent->field_count(); ++i) {
+        int n = parent->field(i)->number();
+        fields_used.insert({n, n});
+      }
+      for (int i = 0; i < parent->extension_range_count(); ++i) {
+        auto* range = parent->extension_range(i);
+        fields_used.insert({range->start_number(),
+                            static_cast<int64_t>(range->end_number()) - 1});
+      }
+      for (int i = 0; i < parent->reserved_range_count(); ++i) {
+        auto* range = parent->reserved_range(i);
+        fields_used.insert(
+            {range->start, static_cast<int64_t>(range->end) - 1});
+      }
+      int64_t proposed_number = 1;
+      for (auto [start, end] : fields_used) {
+        if (start <= proposed_number && proposed_number <= end) {
+          proposed_number = end + 1;
+        } else {
+          break;
+        }
+      }
+
+      const std::string proposed_message =
+          proposed_number <= FieldDescriptor::kMaxNumber
+              ? absl::StrCat("Next available field number is ", proposed_number)
+              : "There are no available field numbers";
+
       AddError(field->full_name(), proto,
                DescriptorPool::ErrorCollector::NUMBER, [&] {
                  return absl::Substitute(
                      "Field number $0 has already been used in "
-                     "\"$1\" by field \"$2\".",
+                     "\"$1\" by field \"$2\". $3.",
                      field->number(), containing_type_name,
-                     conflicting_field->name());
+                     conflicting_field->name(), proposed_message);
                });
     }
   } else {
@@ -7952,6 +7983,16 @@ void DescriptorBuilder::ValidateOptions(const FileDescriptor* file,
   }
   if (file->edition() == Edition::EDITION_PROTO3) {
     ValidateProto3(file, proto);
+  }
+
+  if (file->edition() >= Edition::EDITION_2024) {
+    if (file->options().has_java_multiple_files()) {
+      AddError(file->name(), proto, DescriptorPool::ErrorCollector::OPTION_NAME,
+               "The file option `java_multiple_files` is not supported in "
+               "editions 2024 and above, which defaults to the feature value of"
+               " `nest_in_file_class = NO` (equivalent to "
+               "`java_multiple_files = true`).");
+    }
   }
 }
 
