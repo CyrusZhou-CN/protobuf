@@ -108,6 +108,10 @@ std::string UpbCFilename(const google::protobuf::FileDescriptor* file) {
 }
 
 std::string CppHeaderFilename(const google::protobuf::FileDescriptor* file) {
+  return compiler::StripProto(file->name()) + ".hpb.h";
+}
+
+std::string CppHeaderFilenameLegacy(const google::protobuf::FileDescriptor* file) {
   return compiler::StripProto(file->name()) + ".upb.proto.h";
 }
 
