@@ -45,7 +45,6 @@ namespace protobuf {
 namespace compiler {
 namespace java {
 
-using ::google::protobuf::internal::WireFormat;
 using ::google::protobuf::internal::WireFormatLite;
 
 const char kThickSeparator[] =
@@ -68,7 +67,7 @@ void PrintGeneratedAnnotation(io::Printer* printer, char delimiter,
   ptemplate.append("annotation_file");
   ptemplate.push_back(delimiter);
   ptemplate.append("\")\n");
-  printer->Print(ptemplate.c_str(), "annotation_file", annotation_file);
+  printer->Print(ptemplate, "annotation_file", annotation_file);
 }
 
 void PrintEnumVerifierLogic(
@@ -574,7 +573,7 @@ bool IsDefaultValueJavaDefault(const FieldDescriptor* field) {
 
 bool IsByteStringWithCustomDefaultValue(const FieldDescriptor* field) {
   return GetJavaType(field) == JAVATYPE_BYTES &&
-         field->default_value_string() != "";
+         !field->default_value_string().empty();
 }
 
 constexpr absl::string_view bit_masks[] = {
@@ -954,10 +953,10 @@ bool NestInFileClass(const Descriptor& descriptor, bool immutable) {
   (void)immutable;
   return NestInFileClass(descriptor);
 }
-}  // namespace
 
 template <typename Descriptor>
-absl::Status ValidateNestInFileClassFeature(const Descriptor& descriptor) {
+absl::Status ValidateNestInFileClassFeatureHelper(
+    const Descriptor& descriptor) {
   if (descriptor.containing_type() != nullptr) {
     const pb::JavaFeatures& unresolved_features =
         JavaGenerator::GetUnresolvedSourceFeatures(descriptor, pb::java);
@@ -969,6 +968,15 @@ absl::Status ValidateNestInFileClassFeature(const Descriptor& descriptor) {
     }
   }
   return absl::OkStatus();
+}
+}  // namespace
+
+absl::Status ValidateNestInFileClassFeature(const Descriptor& descriptor) {
+  return ValidateNestInFileClassFeatureHelper(descriptor);
+}
+
+absl::Status ValidateNestInFileClassFeature(const EnumDescriptor& descriptor) {
+  return ValidateNestInFileClassFeatureHelper(descriptor);
 }
 
 bool NestedInFileClass(const Descriptor& descriptor, bool immutable) {
