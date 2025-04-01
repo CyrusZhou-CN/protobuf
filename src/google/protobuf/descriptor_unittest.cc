@@ -6626,6 +6626,80 @@ TEST_F(ValidationErrorTest, JsonNameEmbeddedNull) {
       "null characters.\n");
 }
 
+void TestNameSizeLimit(const FileDescriptorProto& file, std::string& name,
+                       absl::string_view element) {
+  const std::string orig = name;
+
+  // The exact threshold is not fixed, so find it.
+  size_t success = 10;
+  size_t fail = 70000;
+
+  const auto test = [&](size_t size) {
+    name.assign(size, 'x');
+    MockErrorCollector error_collector;
+    DescriptorPool pool;
+    auto* out = pool.BuildFileCollectingErrors(file, &error_collector);
+    if (out == nullptr) {
+      EXPECT_THAT(error_collector.text_, HasSubstr("too long")) << element;
+    }
+    return out != nullptr;
+  };
+
+  while (fail - success > 1) {
+    size_t mid = (fail + success) / 2;
+    if (test(mid)) {
+      success = mid;
+    } else {
+      fail = mid;
+    }
+  }
+
+  ABSL_LOG(INFO) << "First failure on " << fail << " for " << element;
+  for (size_t i = success - 5; i <= success; ++i) {
+    EXPECT_TRUE(test(i)) << element;
+  }
+  for (size_t i = fail; i <= fail + 5; ++i) {
+    EXPECT_FALSE(test(i)) << element;
+  }
+
+  // Reset the name for the next test.
+  name = orig;
+}
+
+TEST_F(ValidationErrorTest, TooLongNamesCauseABuildError) {
+  FileDescriptorProto file_proto;
+  ASSERT_TRUE(TextFormat::ParseFromString(
+      R"pb(
+        name: "foo.proto"
+        message_type {
+          name: "Foo"
+          field { name: "name" number: 1 type: TYPE_STRING }
+        }
+      )pb",
+      &file_proto));
+
+  // Grow package.
+  TestNameSizeLimit(file_proto, *file_proto.mutable_package(), "package");
+
+  // Grow message name.
+  TestNameSizeLimit(file_proto,
+                    *file_proto.mutable_message_type(0)->mutable_name(),
+                    "message");
+
+  // Grow field name.
+  TestNameSizeLimit(
+      file_proto,
+      *file_proto.mutable_message_type(0)->mutable_field(0)->mutable_name(),
+      "field");
+
+  // Grow field json_name.
+  TestNameSizeLimit(file_proto,
+                    *file_proto.mutable_message_type(0)
+                         ->mutable_field(0)
+                         ->mutable_json_name(),
+                    "json_name");
+}
+
 TEST_F(ValidationErrorTest, DuplicateExtensionFieldNumber) {
   BuildDescriptorMessagesInTestPool();
 
@@ -12230,10 +12304,9 @@ TEST_F(DescriptorPoolFeaturesTest, ResolvesFeaturesFor) {
 
 class DescriptorPoolMemoizationTest : public ::testing::Test {
  protected:
-  template <typename Func>
-  const auto& MemoizeProjection(const DescriptorPool* pool,
-                                const FieldDescriptor* field, Func func) {
-    return pool->MemoizeProjection(field, func);
+  template <typename Desc, typename Func>
+  const auto& MemoizeProjection(const Desc* descriptor, Func func) {
+    return DescriptorPool::MemoizeProjection(descriptor, func);
   };
 };
 
@@ -12243,13 +12316,12 @@ TEST_F(DescriptorPoolMemoizationTest, MemoizeProjectionBasic) {
     counter++;
     return field->full_name();
   };
-  proto2_unittest::TestAllTypes message;
-  const Descriptor* descriptor = message.GetDescriptor();
+  const Descriptor* descriptor = proto2_unittest::TestAllTypes::descriptor();
 
   const auto& name = DescriptorPoolMemoizationTest::MemoizeProjection(
-      descriptor->file()->pool(), descriptor->field(0), name_lambda);
+      descriptor->field(0), name_lambda);
   const auto& dupe_name = DescriptorPoolMemoizationTest::MemoizeProjection(
-      descriptor->file()->pool(), descriptor->field(0), name_lambda);
+      descriptor->field(0), name_lambda);
 
   ASSERT_EQ(counter, 1);
   ASSERT_EQ(name, "proto2_unittest.TestAllTypes.optional_int32");
@@ -12261,10 +12333,34 @@ TEST_F(DescriptorPoolMemoizationTest, MemoizeProjectionBasic) {
   EXPECT_EQ(&name, &dupe_name);
 
   auto other_name = DescriptorPoolMemoizationTest::MemoizeProjection(
-      descriptor->file()->pool(), descriptor->field(1), name_lambda);
+      descriptor->field(1), name_lambda);
 
   ASSERT_EQ(counter, 2);
   ASSERT_NE(other_name, "proto2_unittest.TestAllTypes.optional_int32");
+}
+
+TEST_F(DescriptorPoolMemoizationTest, SupportsDifferentDescriptorTypes) {
+  static int counter;
+  counter = 0;
+  auto name_lambda = [](const auto* field) {
+    counter++;
+    return field->full_name();
+  };
+
+  const Descriptor* descriptor = proto2_unittest::TestAllTypes::descriptor();
+
+  // Different descriptor types should be accepted and return the appropriate
+  // result, even when reusing the same lambda type.
+  EXPECT_EQ("proto2_unittest.TestAllTypes.optional_int32",
+            DescriptorPoolMemoizationTest::MemoizeProjection(
+                descriptor->field(0), name_lambda));
+  EXPECT_EQ("proto2_unittest.TestAllTypes",
+            DescriptorPoolMemoizationTest::MemoizeProjection(descriptor,
+                                                             name_lambda));
+  EXPECT_EQ("proto2_unittest.TestAllTypes.NestedMessage",
+            DescriptorPoolMemoizationTest::MemoizeProjection(
+                descriptor->nested_type(0), name_lambda));
+  EXPECT_EQ(counter, 3);
 }
 
 TEST_F(DescriptorPoolMemoizationTest, MemoizeProjectionMultithreaded) {
@@ -12277,9 +12373,9 @@ TEST_F(DescriptorPoolMemoizationTest, MemoizeProjectionMultithreaded) {
   for (int i = 0; i < descriptor->field_count(); ++i) {
     threads.emplace_back([this, name_lambda, descriptor, i]() {
       auto name = DescriptorPoolMemoizationTest::MemoizeProjection(
-          descriptor->file()->pool(), descriptor->field(i), name_lambda);
+          descriptor->field(i), name_lambda);
       auto first_name = DescriptorPoolMemoizationTest::MemoizeProjection(
-          descriptor->file()->pool(), descriptor->field(0), name_lambda);
+          descriptor->field(0), name_lambda);
       ASSERT_THAT(name, HasSubstr("proto2_unittest.TestAllTypes"));
       if (i != 0) {
         ASSERT_NE(name, "proto2_unittest.TestAllTypes.optional_int32");
@@ -12303,7 +12399,7 @@ TEST_F(DescriptorPoolMemoizationTest, MemoizeProjectionInsertionRace) {
     for (int j = 0; j < 3; ++j) {
       threads.emplace_back([this, name_lambda, descriptor, i]() {
         auto name = DescriptorPoolMemoizationTest::MemoizeProjection(
-            descriptor->file()->pool(), descriptor->field(i), name_lambda);
+            descriptor->field(i), name_lambda);
         ASSERT_THAT(name, HasSubstr("proto2_unittest.TestAllTypes"));
       });
     }
