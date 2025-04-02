@@ -5,8 +5,8 @@
 // license that can be found in the LICENSE file or at
 // https://developers.google.com/open-source/licenses/bsd
 
-#ifndef PROTOBUF_HPB_HPB_H_
-#define PROTOBUF_HPB_HPB_H_
+#ifndef GOOGLE_PROTOBUF_HPB_HPB_H__
+#define GOOGLE_PROTOBUF_HPB_HPB_H__
 
 #include <type_traits>
 
@@ -122,11 +122,9 @@ absl::StatusOr<T> Parse(absl::string_view bytes,
 template <typename T>
 absl::StatusOr<absl::string_view> Serialize(internal::PtrOrRaw<T> message,
                                             hpb::Arena& arena) {
-  return ::hpb::internal::Serialize(hpb::interop::upb::GetMessage(message),
-                                    ::hpb::interop::upb::GetMiniTable(message),
-                                    arena.ptr(), 0);
+  return backend::Serialize(message, arena);
 }
 
 }  // namespace hpb
 
-#endif  // PROTOBUF_HPB_HPB_H_
+#endif  // GOOGLE_PROTOBUF_HPB_HPB_H__
