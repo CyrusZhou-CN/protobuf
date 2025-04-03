@@ -313,7 +313,6 @@ cc_library(
         "@abseil-cpp//absl/strings",
         "@abseil-cpp//absl/strings:str_format",
         "@abseil-cpp//absl/types:optional",
-        "@abseil-cpp//absl/types:variant",
     ],
 )
 
@@ -750,7 +749,6 @@ cc_library(
         "@abseil-cpp//absl/time",
         "@abseil-cpp//absl/types:optional",
         "@abseil-cpp//absl/types:span",
-        "@abseil-cpp//absl/types:variant",
         "@abseil-cpp//absl/utility",
     ],
 )
@@ -1556,12 +1554,15 @@ cc_test(
     }),
     deps = [
         ":cc_test_protos",
+        ":cpp_features_cc_proto",
         ":port",
         ":protobuf",
         ":test_util",
         "//src/google/protobuf/stubs",
         "//src/google/protobuf/testing",
         "//src/google/protobuf/testing:file",
+        "@abseil-cpp//absl/strings",
+        "@abseil-cpp//absl/strings:string_view",
         "@googletest//:gtest",
         "@googletest//:gtest_main",
     ],

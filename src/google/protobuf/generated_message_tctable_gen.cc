@@ -46,23 +46,8 @@ bool TreatEnumAsInt(const FieldDescriptor* field) {
           field->containing_type()->map_value() == field);
 }
 
-bool SetEnumValidationRange(int start_value, int64_t size_value, int16_t& start,
-                            uint16_t& size) {
-  if (static_cast<int16_t>(start_value) != start_value) {
-    return false;
-  }
-
-  if (static_cast<uint16_t>(size_value) != size_value) {
-    return false;
-  }
-
-  start = start_value;
-  size = size_value;
-  return true;
-}
-
-bool GetEnumValidationRangeSlow(const EnumDescriptor* enum_type, int16_t& start,
-                                uint16_t& size) {
+bool GetEnumValidationRangeSlow(const EnumDescriptor* enum_type, int32_t& first,
+                                int32_t& last) {
   const auto val = [&](int index) { return enum_type->value(index)->number(); };
   int min = val(0);
   int max = min;
@@ -80,11 +65,8 @@ bool GetEnumValidationRangeSlow(const EnumDescriptor* enum_type, int16_t& start,
     return false;
   }
 
-  if (!SetEnumValidationRange(min, range, start, size)) {
-    // Don't even bother on checking for a dense range if we can't represent the
-    // min/max in the output.
-    return false;
-  }
+  first = min;
+  last = max;
 
   absl::FixedArray<uint64_t> array((range + 63) / 64);
   array.fill(0);
@@ -101,16 +83,17 @@ bool GetEnumValidationRangeSlow(const EnumDescriptor* enum_type, int16_t& start,
   return unique_count == range;
 }
 
-bool GetEnumValidationRange(const EnumDescriptor* enum_type, int16_t& start,
-                            uint16_t& size) {
+bool GetEnumValidationRange(const EnumDescriptor* enum_type, int32_t& first,
+                            int32_t& last) {
   if (!IsEnumFullySequential(enum_type)) {
     // Maybe the labels are not sequential in declaration order, but the values
     // could still be a dense range. Try the slower approach.
-    return GetEnumValidationRangeSlow(enum_type, start, size);
+    return GetEnumValidationRangeSlow(enum_type, first, last);
   }
 
-  return SetEnumValidationRange(enum_type->value(0)->number(),
-                                enum_type->value_count(), start, size);
+  first = enum_type->value(0)->number();
+  last = enum_type->value(enum_type->value_count() - 1)->number();
+  return true;
 }
 
 enum class EnumRangeInfo {
@@ -125,15 +108,14 @@ enum class EnumRangeInfo {
 // to remain unchanged if the enum range is not small.
 EnumRangeInfo GetEnumRangeInfo(const FieldDescriptor* field,
                                uint8_t& rmax_value) {
-  int16_t start;
-  uint16_t size;
-  if (!GetEnumValidationRange(field->enum_type(), start, size)) {
+  int32_t first;
+  int32_t last;
+  if (!GetEnumValidationRange(field->enum_type(), first, last)) {
     return EnumRangeInfo::kNone;
   }
-  int max_value = start + size - 1;
-  if (max_value <= 127 && (start == 0 || start == 1)) {
-    rmax_value = static_cast<uint8_t>(max_value);
-    return start == 0 ? EnumRangeInfo::kContiguous0
+  if (last <= 127 && (first == 0 || first == 1)) {
+    rmax_value = static_cast<uint8_t>(last);
+    return first == 0 ? EnumRangeInfo::kContiguous0
                       : EnumRangeInfo::kContiguous1;
   }
   return EnumRangeInfo::kContiguous;
@@ -280,8 +262,7 @@ bool IsFieldEligibleForFastParsing(
     const TailCallTableInfo::MessageOptions& message_options) {
   const auto* field = entry.field;
   // Map, oneof, weak, and split fields are not handled on the fast path.
-  if (field->is_map() || field->real_containing_oneof() ||
-      field->options().weak() || options.is_implicitly_weak ||
+  if (!IsFieldTypeEligibleForFastParsing(field) || options.is_implicitly_weak ||
       options.should_split) {
     return false;
   }
@@ -304,34 +285,12 @@ bool IsFieldEligibleForFastParsing(
       // Some bytes fields can be handled on fast path.
     case FieldDescriptor::TYPE_STRING:
     case FieldDescriptor::TYPE_BYTES: {
-      auto ctype = field->cpp_string_type();
-      if (ctype == FieldDescriptor::CppStringType::kString ||
-          ctype == FieldDescriptor::CppStringType::kView) {
-        // strings are fine...
-      } else if (ctype == FieldDescriptor::CppStringType::kCord) {
-        // Cords are worth putting into the fast table, if they're not repeated
-        if (field->is_repeated()) return false;
-      } else {
-        return false;
-      }
       if (options.is_string_inlined) {
         ABSL_CHECK(!field->is_repeated());
         // For inlined strings, the donation state index is stored in the
         // `aux_idx` field of the fast parsing info. We need to check the range
         // of that value instead of the auxiliary index.
         aux_idx = entry.inlined_string_idx;
-      }
-      break;
-    }
-
-    case FieldDescriptor::TYPE_ENUM: {
-      uint8_t rmax_value;
-      if (!message_options.uses_codegen &&
-          GetEnumRangeInfo(field, rmax_value) == EnumRangeInfo::kNone) {
-        // We can't use fast parsing for these entries because we can't specify
-        // the validator.
-        // TODO: Implement a fast parser for these enums.
-        return false;
       }
       break;
     }
@@ -350,42 +309,7 @@ bool IsFieldEligibleForFastParsing(
     return false;
   }
 
-  // The largest tag that can be read by the tailcall parser is two bytes
-  // when varint-coded. This allows 14 bits for the numeric tag value:
-  //   byte 0   byte 1
-  //   1nnnnttt 0nnnnnnn
-  //    ^^^^^^^  ^^^^^^^
-  if (field->number() >= 1 << 11) return false;
-
   return true;
-}
-
-absl::optional<uint32_t> GetEndGroupTag(const Descriptor* descriptor) {
-  auto* parent = descriptor->containing_type();
-  if (parent == nullptr) return absl::nullopt;
-  for (int i = 0; i < parent->field_count(); ++i) {
-    auto* field = parent->field(i);
-    if (field->type() == field->TYPE_GROUP &&
-        field->message_type() == descriptor) {
-      return WireFormatLite::MakeTag(field->number(),
-                                     WireFormatLite::WIRETYPE_END_GROUP);
-    }
-  }
-  return absl::nullopt;
-}
-
-uint32_t RecodeTagForFastParsing(uint32_t tag) {
-  ABSL_DCHECK_LE(tag, 0x3FFFu);
-  // Construct the varint-coded tag. If it is more than 7 bits, we need to
-  // shift the high bits and add a continue bit.
-  if (uint32_t hibits = tag & 0xFFFFFF80) {
-    // hi = tag & ~0x7F
-    // lo = tag & 0x7F
-    // This shifts hi to the left by 1 to the next byte and sets the
-    // continuation bit.
-    tag = tag + hibits + 128;
-  }
-  return tag;
 }
 
 void PopulateFastFields(
@@ -395,25 +319,11 @@ void PopulateFastFields(
     absl::Span<const TailCallTableInfo::FieldOptions> fields,
     absl::Span<TailCallTableInfo::FastFieldInfo> result,
     uint32_t& important_fields) {
-  const uint32_t idx_mask = static_cast<uint32_t>(result.size() - 1);
-  const auto tag_to_idx = [&](uint32_t tag) {
-    // The field index is determined by the low bits of the field number, where
-    // the table size determines the width of the mask. The largest table
-    // supported is 32 entries. The parse loop uses these bits directly, so that
-    // the dispatch does not require arithmetic:
-    //        byte 0   byte 1
-    //   tag: 1nnnnttt 0nnnnnnn
-    //        ^^^^^
-    //         idx (table_size_log2=5)
-    // This means that any field number that does not fit in the lower 4 bits
-    // will always have the top bit of its table index asserted.
-    return (tag >> 3) & idx_mask;
-  };
-
   if (end_group_tag.has_value() && (*end_group_tag >> 14) == 0) {
     // Fits in 1 or 2 varint bytes.
-    const uint32_t tag = RecodeTagForFastParsing(*end_group_tag);
-    const uint32_t fast_idx = tag_to_idx(tag);
+    const uint32_t tag =
+        TcParseTableBase::RecodeTagForFastParsing(*end_group_tag);
+    const uint32_t fast_idx = TcParseTableBase::TagToIdx(tag, result.size());
 
     TailCallTableInfo::FastFieldInfo& info = result[fast_idx];
     info.data = TailCallTableInfo::FastFieldInfo::NonField{
@@ -433,8 +343,8 @@ void PopulateFastFields(
     }
 
     const auto* field = entry.field;
-    const uint32_t tag = RecodeTagForFastParsing(WireFormat::MakeTag(field));
-    const uint32_t fast_idx = tag_to_idx(tag);
+    const uint32_t tag = GetRecodedTagForFastParsing(field);
+    const uint32_t fast_idx = TcParseTableBase::TagToIdx(tag, result.size());
 
     TailCallTableInfo::FastFieldInfo& info = result[fast_idx];
     if (info.AsNonField() != nullptr) {
@@ -664,9 +574,9 @@ uint16_t MakeTypeCardForField(
                          ? fl::kPackedOpenEnum
                          : fl::kOpenEnum;
       } else {
-        int16_t start;
-        uint16_t size;
-        if (GetEnumValidationRange(field->enum_type(), start, size)) {
+        int32_t first;
+        int32_t last;
+        if (GetEnumValidationRange(field->enum_type(), first, last)) {
           // Validation is done by range check (start/length in FieldAux).
           type_card |= field->is_repeated() && field->is_packed()
                            ? fl::kPackedEnumRange
@@ -797,6 +707,71 @@ bool HasWeakFields(const Descriptor* descriptor) {
 }
 
 }  // namespace
+
+uint32_t GetRecodedTagForFastParsing(const FieldDescriptor* field) {
+  return internal::TcParseTableBase::RecodeTagForFastParsing(
+      internal::WireFormat::MakeTag(field));
+}
+
+absl::optional<uint32_t> GetEndGroupTag(const Descriptor* descriptor) {
+  auto* parent = descriptor->containing_type();
+  if (parent == nullptr) return absl::nullopt;
+  for (int i = 0; i < parent->field_count(); ++i) {
+    auto* field = parent->field(i);
+    if (field->type() == field->TYPE_GROUP &&
+        field->message_type() == descriptor) {
+      return WireFormatLite::MakeTag(field->number(),
+                                     WireFormatLite::WIRETYPE_END_GROUP);
+    }
+  }
+  return absl::nullopt;
+}
+
+uint32_t FastParseTableSize(size_t num_fields,
+                            absl::optional<uint32_t> end_group_tag) {
+  return end_group_tag.has_value()
+             ? TcParseTableBase::kMaxFastFields
+             : std::max(size_t{1}, std::min(TcParseTableBase::kMaxFastFields,
+                                            absl::bit_ceil(num_fields + 1)));
+}
+
+bool IsFieldTypeEligibleForFastParsing(const FieldDescriptor* field) {
+  // Map, oneof, weak, and split fields are not handled on the fast path.
+  if (field->is_map() || field->real_containing_oneof() ||
+      field->options().weak()) {
+    return false;
+  }
+
+  switch (field->type()) {
+      // Some bytes fields can be handled on fast path.
+    case FieldDescriptor::TYPE_STRING:
+    case FieldDescriptor::TYPE_BYTES: {
+      auto ctype = field->cpp_string_type();
+      if (ctype == FieldDescriptor::CppStringType::kString ||
+          ctype == FieldDescriptor::CppStringType::kView) {
+        // strings are fine...
+      } else if (ctype == FieldDescriptor::CppStringType::kCord) {
+        // Cords are worth putting into the fast table, if they're not repeated
+        if (field->is_repeated()) return false;
+      } else {
+        return false;
+      }
+      break;
+    }
+
+    default:
+      break;
+  }
+
+  // The largest tag that can be read by the tailcall parser is two bytes
+  // when varint-coded. This allows 14 bits for the numeric tag value:
+  //   byte 0   byte 1
+  //   1nnnnttt 0nnnnnnn
+  //    ^^^^^^^  ^^^^^^^
+  if (field->number() >= 1 << 11) return false;
+
+  return true;
+}
 
 TailCallTableInfo::TailCallTableInfo(
     const Descriptor* descriptor, const MessageOptions& message_options,
@@ -963,8 +938,8 @@ TailCallTableInfo::TailCallTableInfo(
       aux_entries.push_back({});
       auto& aux_entry = aux_entries.back();
 
-      if (GetEnumValidationRange(field->enum_type(), aux_entry.enum_range.start,
-                                 aux_entry.enum_range.size)) {
+      if (GetEnumValidationRange(field->enum_type(), aux_entry.enum_range.first,
+                                 aux_entry.enum_range.last)) {
         aux_entry.type = kEnumRange;
       } else {
         aux_entry.type = kEnumValidator;
@@ -992,13 +967,13 @@ TailCallTableInfo::TailCallTableInfo(
 
   auto end_group_tag = GetEndGroupTag(descriptor);
 
-  constexpr size_t kMaxFastFields = 32;
-  FastFieldInfo fast_fields[kMaxFastFields];
+  FastFieldInfo fast_fields[TcParseTableBase::kMaxFastFields];
   // Bit mask for the fields that are "important". Unimportant fields might be
   // set but it's ok if we lose them from the fast table. For example, cold
   // fields.
   uint32_t important_fields = 0;
-  static_assert(sizeof(important_fields) * 8 >= kMaxFastFields, "");
+  static_assert(
+      sizeof(important_fields) * 8 >= TcParseTableBase::kMaxFastFields, "");
   // The largest table we allow has the same number of entries as the
   // message has fields, rounded up to the next power of 2 (e.g., a message
   // with 5 fields can have a fast table of size 8). A larger table *might*
@@ -1013,11 +988,7 @@ TailCallTableInfo::TailCallTableInfo(
   // documented one. When the number of fields is exactly a power of two we
   // allow double that.
   size_t num_fast_fields =
-      end_group_tag.has_value()
-          ? kMaxFastFields
-          : std::max(size_t{1},
-                     std::min(kMaxFastFields,
-                              absl::bit_ceil(ordered_fields.size() + 1)));
+      FastParseTableSize(ordered_fields.size(), end_group_tag);
   PopulateFastFields(
       end_group_tag, field_entries, message_options, ordered_fields,
       absl::MakeSpan(fast_fields, num_fast_fields), important_fields);

@@ -250,7 +250,7 @@ class DescriptorNames {
   }
 
  private:
-  uint16_t get_size(int index) const {
+  size_t get_size(int index) const {
     // We don't use `uint16_t` in the payload type to avoid having to align it.
     // Instead, we read via memcpy.
     uint16_t size;
@@ -258,7 +258,7 @@ class DescriptorNames {
     return size;
   }
 
-  absl::string_view get(uint16_t offset, uint16_t size) const {
+  absl::string_view get(size_t offset, size_t size) const {
     return absl::string_view(payload_ - offset, size);
   }
 
@@ -938,15 +938,24 @@ class PROTOBUF_EXPORT FieldDescriptor : private internal::SymbolBase,
   CppType cpp_type() const;  // C++ type of this field.
   // Name of the C++ type.
   absl::string_view cpp_type_name() const;
+
+  // This should never be called directly. Use is_required() and is_repeated()
+  // helper methods instead.
+  ABSL_DEPRECATED("Use is_required() or is_repeated() instead.")
   Label label() const;  // optional/required/repeated
 
 #ifndef SWIG
   CppStringType cpp_string_type() const;  // The C++ string type of this field.
 #endif
 
-  bool is_required() const;  // shorthand for label() == LABEL_REQUIRED
-  bool is_optional() const;  // shorthand for label() == LABEL_OPTIONAL
-  bool is_repeated() const;  // shorthand for label() == LABEL_REPEATED
+  // Whether or not the field is required. For proto2 required fields and
+  // Editions LEGACY_REQUIRED fields.
+  bool is_required() const;
+  bool is_repeated() const;  // Whether or not the field is repeated/map field.
+
+  ABSL_DEPRECATED("Use !is_required() && !is_repeated() instead.")
+  bool is_optional() const;  // Use !is_required() && !is_repeated() instead.
+
   bool is_packable() const;  // shorthand for is_repeated() &&
                              //               IsTypePackable(type())
   bool is_map() const;       // shorthand for type() == TYPE_MESSAGE &&
@@ -2509,6 +2518,7 @@ class PROTOBUF_EXPORT DescriptorPool {
   friend class google::protobuf::descriptor_unittest::ValidationErrorTest;
   friend class ::google::protobuf::compiler::CommandLineInterface;
   friend class TextFormat;
+  friend Reflection;
 
   struct MemoBase {
     virtual ~MemoBase() = default;
@@ -2518,28 +2528,30 @@ class PROTOBUF_EXPORT DescriptorPool {
     T value;
   };
 
-  // Memoize a projection of a field.  This is used to cache the results of
-  // calling a function on a field, used for expensive descriptor calculations.
-  template <typename Func>
-  const auto& MemoizeProjection(const FieldDescriptor* field, Func func) const {
-    using ResultT = std::decay_t<decltype(func(field))>;
-    ABSL_DCHECK(field->file()->pool() == this);
+  // Memoize a projection of a descriptor. This is used to cache the results of
+  // calling a function on a descriptor, used for expensive descriptor
+  // calculations.
+  template <typename Desc, typename Func>
+  static const auto& MemoizeProjection(const Desc* descriptor, Func func) {
+    using ResultT = std::decay_t<decltype(func(descriptor))>;
+    auto* pool = descriptor->file()->pool();
     static_assert(std::is_empty_v<Func>);
     // This static bool is unique per-Func, so its address can be used as a key.
     static bool type_key;
-    auto key = std::pair<const void*, const void*>(field, &type_key);
+    auto key = std::pair<const void*, const void*>(descriptor, &type_key);
     {
-      absl::ReaderMutexLock lock(&field_memo_table_mutex_);
-      auto it = field_memo_table_->find(key);
-      if (it != field_memo_table_->end()) {
+      absl::ReaderMutexLock lock(&pool->field_memo_table_mutex_);
+      auto it = pool->field_memo_table_->find(key);
+      if (it != pool->field_memo_table_->end()) {
         return internal::DownCast<const MemoData<ResultT>&>(*it->second).value;
       }
     }
     auto result = std::make_unique<MemoData<ResultT>>();
-    result->value = func(field);
+    result->value = func(descriptor);
     {
-      absl::MutexLock lock(&field_memo_table_mutex_);
-      auto insert_result = field_memo_table_->insert({key, std::move(result)});
+      absl::MutexLock lock(&pool->field_memo_table_mutex_);
+      auto insert_result =
+          pool->field_memo_table_->insert({key, std::move(result)});
       auto it = insert_result.first;
       return internal::DownCast<const MemoData<ResultT>&>(*it->second).value;
     }
