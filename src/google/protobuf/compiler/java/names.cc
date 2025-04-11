@@ -122,19 +122,7 @@ std::string ClassName(const FileDescriptor* descriptor) {
 
 std::string FileJavaPackage(const FileDescriptor* file, bool immutable,
                             Options options) {
-  std::string result;
-
-  if (file->options().has_java_package()) {
-    result = file->options().java_package();
-  } else {
-    result = DefaultPackage(options);
-    if (!file->package().empty()) {
-      if (!result.empty()) result += '.';
-      absl::StrAppend(&result, file->package());
-    }
-  }
-
-  return result;
+  return ClassNameResolver(options).GetFileJavaPackage(file, immutable);
 }
 
 std::string FileJavaPackage(const FileDescriptor* file, Options options) {
