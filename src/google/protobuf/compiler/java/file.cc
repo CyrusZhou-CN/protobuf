@@ -23,6 +23,7 @@
 #include "absl/strings/string_view.h"
 #include "google/protobuf/compiler/code_generator.h"
 #include "google/protobuf/compiler/java/context.h"
+#include "google/protobuf/compiler/java/generator.h"
 #include "google/protobuf/compiler/java/generator_common.h"
 #include "google/protobuf/compiler/java/generator_factory.h"
 #include "google/protobuf/compiler/java/helpers.h"
