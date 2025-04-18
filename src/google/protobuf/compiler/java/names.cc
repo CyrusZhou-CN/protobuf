@@ -31,11 +31,6 @@ namespace compiler {
 namespace java {
 
 namespace {
-
-const char* DefaultPackage(Options options) {
-  return options.opensource_runtime ? "" : "com.google.protos";
-}
-
 bool IsReservedName(absl::string_view name) {
   static const auto& kReservedNames =
       *new absl::flat_hash_set<absl::string_view>({
