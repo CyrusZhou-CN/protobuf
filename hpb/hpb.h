@@ -60,21 +60,16 @@ typename T::Proxy CloneMessage(Ptr<T> message, Arena& arena) {
 
 template <typename T>
 void DeepCopy(Ptr<const T> source_message, Ptr<T> target_message) {
-  static_assert(!std::is_const_v<T>);
-  internal::DeepCopy(interop::upb::GetMessage(target_message),
-                     interop::upb::GetMessage(source_message), T::minitable(),
-                     interop::upb::GetArena(target_message));
+  backend::DeepCopy(source_message, target_message);
 }
 
 template <typename T>
 void DeepCopy(Ptr<const T> source_message, T* target_message) {
-  static_assert(!std::is_const_v<T>);
   DeepCopy(source_message, Ptr(target_message));
 }
 
 template <typename T>
 void DeepCopy(const T* source_message, T* target_message) {
-  static_assert(!std::is_const_v<T>);
   DeepCopy(Ptr(source_message), Ptr(target_message));
 }
 
