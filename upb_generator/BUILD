@@ -94,6 +94,7 @@ bootstrap_cc_library(
     deps = [
         "//src/google/protobuf",
         "//src/google/protobuf/compiler:code_generator_lite",
+        "//src/google/protobuf/compiler:plugin_cc_proto",
         "//upb:base",
         "//upb:mem",
         "//upb:port",

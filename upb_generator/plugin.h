@@ -11,6 +11,7 @@
 #include <stdio.h>
 
 #include <cstring>
+#include <memory>
 #include <string>
 #include <utility>
 #include <vector>
@@ -32,6 +33,11 @@
 // Must be last.
 #include "upb/port/def.inc"
 
+namespace google::protobuf::compiler {
+class CodeGeneratorRequest;
+}  // namespace protobuf
+}  // namespace google::compiler
+
 namespace upb {
 namespace generator {
 
@@ -46,6 +52,14 @@ inline std::vector<std::pair<std::string, std::string>> ParseGeneratorParameter(
 void PopulateDefPool(const google::protobuf::FileDescriptor* file, upb::Arena* arena,
                      DefPoolPair* pools,
                      absl::flat_hash_set<std::string>* files_seen);
+
+// Returns a new DefPoolPair with a google::protobuf::compiler::CodeGeneratorRequest.
+// NewDefPool only uses the proto_file field of the request. The message
+// CodeGeneratorResponse is used as the input because we can rely on the
+// topological order of the files in the request as described in
+// http://google3/third_party/protobuf/compiler/plugin.proto;l=54-56;rcl=586756816.
+std::unique_ptr<DefPoolPair> NewDefPool(
+    const google::protobuf::compiler::CodeGeneratorRequest& request, upb::Arena* arena);
 
 }  // namespace generator
 }  // namespace upb
