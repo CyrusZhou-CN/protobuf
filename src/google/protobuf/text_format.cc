@@ -24,11 +24,13 @@
 #include <random>
 #include <string>
 #include <utility>
+#include <variant>
 #include <vector>
 
 #include "absl/base/macros.h"
 #include "absl/container/btree_set.h"
 #include "absl/log/absl_check.h"
+#include "absl/memory/memory.h"
 #include "absl/strings/ascii.h"
 #include "absl/strings/cord.h"
 #include "absl/strings/escaping.h"
@@ -44,6 +46,7 @@
 #include "google/protobuf/descriptor.h"
 #include "google/protobuf/descriptor.pb.h"
 #include "google/protobuf/dynamic_message.h"
+#include "google/protobuf/internal_visibility.h"
 #include "google/protobuf/io/coded_stream.h"
 #include "google/protobuf/io/strtod.h"
 #include "google/protobuf/io/tokenizer.h"
@@ -2410,12 +2413,29 @@ void TextFormat::Printer::PrintFieldValueToString(const Message& message,
   PrintFieldValue(message, message.GetReflection(), field, index, &generator);
 }
 
+namespace internal {
+
+// Smart pointer that can dynamically own or not own depending on whether a raw
+// pointer or unique_ptr is passed.
+template <typename T>
+class MaybeOwnedPtr : public std::variant<T*, std::unique_ptr<T>> {
+ public:
+  T& operator*() const { return *this->operator->(); }
+
+  T* operator->() const {
+    return std::holds_alternative<T*>(*this)
+               ? std::get<T*>(*this)
+               : std::get<std::unique_ptr<T>>(*this).get();
+  }
+};
+
 class MapEntryMessageComparator {
  public:
   explicit MapEntryMessageComparator(const Descriptor* descriptor)
       : field_(descriptor->field(0)) {}
 
-  bool operator()(const Message* a, const Message* b) {
+  bool operator()(const MaybeOwnedPtr<const Message>& a,
+                  const MaybeOwnedPtr<const Message>& b) {
     const Reflection* reflection = a->GetReflection();
     switch (field_->cpp_type()) {
       case FieldDescriptor::CPPTYPE_BOOL: {
@@ -2458,34 +2478,31 @@ class MapEntryMessageComparator {
   const FieldDescriptor* field_;
 };
 
-namespace internal {
 class MapFieldPrinterHelper {
  public:
   // DynamicMapSorter::Sort cannot be used because it enforces syncing with
   // repeated field.
-  static bool SortMap(const Message& message, const Reflection* reflection,
-                      const FieldDescriptor* field,
-                      std::vector<const Message*>* sorted_map_field);
+  static std::vector<MaybeOwnedPtr<const Message>> SortMap(
+      const Message& message, const Reflection* reflection,
+      const FieldDescriptor* field);
   static void CopyKey(const MapKey& key, Message* message,
                       const FieldDescriptor* field_desc);
   static void CopyValue(const MapValueRef& value, Message* message,
                         const FieldDescriptor* field_desc);
 };
 
-// Returns true if elements contained in sorted_map_field need to be released.
-bool MapFieldPrinterHelper::SortMap(
+std::vector<MaybeOwnedPtr<const Message>> MapFieldPrinterHelper::SortMap(
     const Message& message, const Reflection* reflection,
-    const FieldDescriptor* field,
-    std::vector<const Message*>* sorted_map_field) {
-  bool need_release = false;
+    const FieldDescriptor* field) {
   const MapFieldBase& base = *reflection->GetMapData(message, field);
+  std::vector<MaybeOwnedPtr<const Message>> sorted_map_field;
 
   if (base.IsRepeatedFieldValid()) {
     const RepeatedPtrField<Message>& map_field =
         reflection->GetRepeatedPtrFieldInternal<Message>(message, field);
     for (int i = 0; i < map_field.size(); ++i) {
-      sorted_map_field->push_back(
-          const_cast<RepeatedPtrField<Message>*>(&map_field)->Mutable(i));
+      sorted_map_field.push_back(
+          {const_cast<RepeatedPtrField<Message>*>(&map_field)->Mutable(i)});
     }
   } else {
     // TODO: For performance, instead of creating map entry message
@@ -2497,19 +2514,19 @@ bool MapFieldPrinterHelper::SortMap(
              reflection->MapBegin(const_cast<Message*>(&message), field);
          iter != reflection->MapEnd(const_cast<Message*>(&message), field);
          ++iter) {
-      Message* map_entry_message = prototype->New();
-      CopyKey(iter.GetKey(), map_entry_message, map_entry_desc->field(0));
-      CopyValue(iter.GetValueRef(), map_entry_message,
+      std::unique_ptr<Message> map_entry_message =
+          absl::WrapUnique(prototype->New());
+      CopyKey(iter.GetKey(), map_entry_message.get(), map_entry_desc->field(0));
+      CopyValue(iter.GetValueRef(), map_entry_message.get(),
                 map_entry_desc->field(1));
-      sorted_map_field->push_back(map_entry_message);
+      sorted_map_field.push_back({std::move(map_entry_message)});
     }
-    need_release = true;
   }
 
   MapEntryMessageComparator comparator(field->message_type());
-  std::stable_sort(sorted_map_field->begin(), sorted_map_field->end(),
+  std::stable_sort(sorted_map_field.begin(), sorted_map_field.end(),
                    comparator);
-  return need_release;
+  return sorted_map_field;
 }
 
 void MapFieldPrinterHelper::CopyKey(const MapKey& key, Message* message,
@@ -2607,12 +2624,11 @@ void TextFormat::Printer::PrintField(const Message& message,
     count = 1;
   }
 
-  std::vector<const Message*> sorted_map_field;
-  bool need_release = false;
+  std::vector<internal::MaybeOwnedPtr<const Message>> sorted_map_field;
   bool is_map = field->is_map();
   if (is_map) {
-    need_release = internal::MapFieldPrinterHelper::SortMap(
-        message, reflection, field, &sorted_map_field);
+    sorted_map_field =
+        internal::MapFieldPrinterHelper::SortMap(message, reflection, field);
   }
 
   for (int j = 0; j < count; ++j) {
@@ -2650,12 +2666,6 @@ void TextFormat::Printer::PrintField(const Message& message,
       } else {
         generator->PrintLiteral("\n");
       }
-    }
-  }
-
-  if (need_release) {
-    for (const Message* message_to_delete : sorted_map_field) {
-      delete message_to_delete;
     }
   }
 }
