@@ -703,7 +703,17 @@ def GroupDecoder(field_number, is_repeated, is_packed, key, new_default):
         if value is None:
           value = field_dict.setdefault(key, new_default(message))
         # Read sub-message.
+        # BEGIN GOOGLE-INTERNAL
+        current_depth += 1
+        if current_depth > _recursion_limit:
+          raise _DecodeError(
+              'Error parsing message: too many levels of nesting.'
+          )
+        # END GOOGLE-INTERNAL
         pos = value.add()._InternalParse(buffer, pos, end, current_depth)
+        # BEGIN GOOGLE-INTERNAL
+        current_depth -= 1
+        # END GOOGLE-INTERNAL
         # Read end tag.
         new_pos = pos+end_tag_len
         if buffer[pos:new_pos] != end_tag_bytes or new_pos > end:
@@ -722,7 +732,15 @@ def GroupDecoder(field_number, is_repeated, is_packed, key, new_default):
       if value is None:
         value = field_dict.setdefault(key, new_default(message))
       # Read sub-message.
+      # BEGIN GOOGLE-INTERNAL
+      current_depth += 1
+      if current_depth > _recursion_limit:
+        raise _DecodeError('Error parsing message: too many levels of nesting.')
+      # END GOOGLE-INTERNAL
       pos = value._InternalParse(buffer, pos, end, current_depth)
+      # BEGIN GOOGLE-INTERNAL
+      current_depth -= 1
+      # END GOOGLE-INTERNAL
       # Read end tag.
       new_pos = pos+end_tag_len
       if buffer[pos:new_pos] != end_tag_bytes or new_pos > end:
@@ -755,6 +773,13 @@ def MessageDecoder(field_number, is_repeated, is_packed, key, new_default):
         if new_pos > end:
           raise _DecodeError('Truncated message.')
         # Read sub-message.
+        # BEGIN GOOGLE-INTERNAL
+        current_depth += 1
+        if current_depth > _recursion_limit:
+          raise _DecodeError(
+              'Error parsing message: too many levels of nesting.'
+          )
+        # END GOOGLE-INTERNAL
         if (
             value.add()._InternalParse(buffer, pos, new_pos, current_depth)
             != new_pos
@@ -762,6 +787,9 @@ def MessageDecoder(field_number, is_repeated, is_packed, key, new_default):
           # The only reason _InternalParse would return early is if it
           # encountered an end-group tag.
           raise _DecodeError('Unexpected end-group tag.')
+        # BEGIN GOOGLE-INTERNAL
+        current_depth -= 1
+        # END GOOGLE-INTERNAL
         # Predict that the next tag is another copy of the same repeated field.
         pos = new_pos + tag_len
         if buffer[new_pos:pos] != tag_bytes or new_pos == end:
@@ -781,10 +809,18 @@ def MessageDecoder(field_number, is_repeated, is_packed, key, new_default):
       if new_pos > end:
         raise _DecodeError('Truncated message.')
       # Read sub-message.
+      # BEGIN GOOGLE-INTERNAL
+      current_depth += 1
+      if current_depth > _recursion_limit:
+        raise _DecodeError('Error parsing message: too many levels of nesting.')
+      # END GOOGLE-INTERNAL
       if value._InternalParse(buffer, pos, new_pos, current_depth) != new_pos:
         # The only reason _InternalParse would return early is if it encountered
         # an end-group tag.
         raise _DecodeError('Unexpected end-group tag.')
+      # BEGIN GOOGLE-INTERNAL
+      current_depth -= 1
+      # END GOOGLE-INTERNAL
       return new_pos
 
     return DecodeField
@@ -982,6 +1018,19 @@ def _DecodeFixed32(buffer, pos):
   return (struct.unpack('<I', buffer[pos:new_pos])[0], new_pos)
 
 
+# BEGIN GOOGLE-INTERNAL
+DEFAULT_RECURSION_LIMIT = 100
+_recursion_limit = DEFAULT_RECURSION_LIMIT
+
+
+def SetRecursionLimit(new_limit):
+  global _recursion_limit
+  _recursion_limit = new_limit
+
+
+# END GOOGLE-INTERNAL
+
+
 def _DecodeUnknownFieldSet(buffer, pos, end_pos=None, current_depth=0):
   """Decode UnknownFieldSet.  Returns the UnknownFieldSet and new position."""
 
@@ -1020,7 +1069,15 @@ def _DecodeUnknownField(
     end_tag_bytes = encoder.TagBytes(
         field_number, wire_format.WIRETYPE_END_GROUP
     )
+    # BEGIN GOOGLE-INTERNAL
+    current_depth += 1
+    if current_depth >= _recursion_limit:
+      raise _DecodeError('Error parsing message: too many levels of nesting.')
+    # END GOOGLE-INTERNAL
     data, pos = _DecodeUnknownFieldSet(buffer, pos, end_pos, current_depth)
+    # BEGIN GOOGLE-INTERNAL
+    current_depth -= 1
+    # END GOOGLE-INTERNAL
     # Check end tag.
     if buffer[pos - len(end_tag_bytes) : pos] != end_tag_bytes:
       raise _DecodeError('Missing group end tag.')

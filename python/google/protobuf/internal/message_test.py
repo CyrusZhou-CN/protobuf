@@ -36,6 +36,7 @@ from google.protobuf.internal import enum_type_wrapper
 from google.protobuf.internal import more_extensions_pb2
 from google.protobuf.internal import more_messages_pb2
 from google.protobuf.internal import packed_field_test_pb2
+from google.protobuf.internal import self_recursive_pb2
 from google.protobuf.internal import test_proto3_optional_pb2
 from google.protobuf.internal import test_util
 from google.protobuf.internal import testing_refleaks
@@ -46,6 +47,22 @@ from google.protobuf import map_proto2_unittest_pb2
 from google.protobuf import map_unittest_pb2
 from google.protobuf import unittest_pb2
 from google.protobuf import unittest_proto3_arena_pb2
+
+# BEGIN GOOGLE-INTERNAL
+# pylint: disable=g-bad-import-order
+from google3.pyglib import resources
+from google3.testing.pybase import unittest
+from google.protobuf.pyext import python_pb2
+from google.protobuf.pyext import python_proto3_pb2
+import psutil
+
+
+def GetRssMb():
+  rss = psutil.Process().memory_info().rss
+  return rss / 1024 / 1024
+
+
+# END GOOGLE-INTERNAL
 
 UCS2_MAXUNICODE = 65535
 
@@ -1431,6 +1448,52 @@ class MessageTest(unittest.TestCase):
     )
 
 
+@testing_refleaks.TestCase
+class TestRecursiveGroup(unittest.TestCase):
+
+  def _MakeRecursiveGroupMessage(self, n):
+    msg = self_recursive_pb2.SelfRecursive()
+    sub = msg
+    for _ in range(n):
+      sub = sub.sub_group
+    sub.i = 1
+    return msg.SerializeToString()
+
+  def testRecursiveGroups(self):
+    recurse_msg = self_recursive_pb2.SelfRecursive()
+    data = self._MakeRecursiveGroupMessage(100)
+    recurse_msg.ParseFromString(data)
+    self.assertTrue(recurse_msg.HasField('sub_group'))
+
+  def testRecursiveGroupsException(self):
+    if api_implementation.Type() != 'python':
+      api_implementation._c_module.SetAllowOversizeProtos(False)
+    recurse_msg = self_recursive_pb2.SelfRecursive()
+    data = self._MakeRecursiveGroupMessage(300)
+    with self.assertRaises(message.DecodeError) as context:
+      recurse_msg.ParseFromString(data)
+    self.assertIn('Error parsing message', str(context.exception))
+    if api_implementation.Type() == 'python':
+      self.assertIn('too many levels of nesting', str(context.exception))
+
+  def testRecursiveGroupsUnknownFields(self):
+    if api_implementation.Type() != 'python':
+      api_implementation._c_module.SetAllowOversizeProtos(False)
+    test_msg = unittest_pb2.TestAllTypes()
+    data = self._MakeRecursiveGroupMessage(300)  # unknown to test_msg
+    with self.assertRaises(message.DecodeError) as context:
+      test_msg.ParseFromString(data)
+    self.assertIn(
+        'Error parsing message',
+        str(context.exception),
+    )
+    if api_implementation.Type() == 'python':
+      self.assertIn('too many levels of nesting', str(context.exception))
+      decoder.SetRecursionLimit(310)
+      test_msg.ParseFromString(data)
+      decoder.SetRecursionLimit(decoder.DEFAULT_RECURSION_LIMIT)
+
+
 # Class to test proto2-only features (required, extensions, etc.)
 @testing_refleaks.TestCase
 class Proto2Test(unittest.TestCase):
@@ -1730,6 +1793,56 @@ class Proto2Test(unittest.TestCase):
     self.assertEqual(100, msg.optional_int32)
     self.assertEqual(200, msg.optional_fixed32)
 
+  # BEGIN GOOGLE-INTERNAL
+  # This tests that pickles in the old format can still be unpickled after
+  # the change in http://cl/29101938.  However, this old-format pickle
+  # contains proto2 only fields from TestAllTypes (like default_int32, etc).
+  # To make this test support proto3 we would need to construct an old-format
+  # pickle that doesn't contain these fields.  This is likely not worth the
+  # effort.
+
+  def testPickleBackwardsCompatibility(self):
+    golden_message = unittest_pb2.TestAllTypes()
+    test_util.SetAllFields(golden_message)
+    golden_data = golden_message.SerializeToString()
+    golden_message = unittest_pb2.TestAllTypes()
+    golden_message.ParseFromString(golden_data)
+    pickled_message = pickle.dumps(golden_message)
+    golden_pickle = resources.GetResource(
+        'google3/google/protobuf/internal/testdata'
+        '/golden_pickle_original_format')
+    # The whole point is to test two different pickle formats, so they
+    # better not be the same.
+    self.assertNotEqual(golden_pickle, pickled_message)
+    if str is bytes:
+      # Skip unpickling in PY3.
+      # Golden is format 0 and has var name 'serialized' and binary data
+      # stored as 'S' (string) type. There is no way to restore it properly:
+      # 'serialized' as str and data as bytes.
+      # We don't support unpickling PY2-pickled datafiles in PY3.
+      unpickled_message = pickle.loads(golden_pickle)
+      self.assertEqual(unpickled_message, golden_message)
+
+  @unittest.skipIf(str is not bytes, 'No support for Python 2 pickles under 3.')
+  def testPickleBackwardsCompatibility2(self):
+    """Backwards compatible to  cl/29101938.
+
+    Since cl/29101938 messages are pickled with __getstate__. This
+    checks that saved pickles can be read by newer unpickle code.
+    """
+    golden_message = unittest_pb2.TestAllTypes()
+    test_util.SetAllFields(golden_message)
+    golden_data = golden_message.SerializeToString()
+    golden_message = unittest_pb2.TestAllTypes()
+    golden_message.ParseFromString(golden_data)
+    golden_pickle = resources.GetResource(
+        'google3/google/protobuf/internal/testdata'
+        '/golden_pickle_message')
+    golden_pickle_message = pickle.loads(golden_pickle)
+    self.assertEqual(golden_pickle_message, golden_message)
+
+  # END GOOGLE-INTERNAL
+
   def test_documentation(self):
     # Also used by the interactive help() function.
     doc = pydoc.html.document(unittest_pb2.TestAllTypes, 'message')
@@ -1905,7 +2018,7 @@ class Proto3Test(unittest.TestCase):
       if field.name.startswith('optional_'):
         self.assertTrue(field.has_presence)
     for field in unittest_pb2.TestAllTypes.DESCRIPTOR.fields:
-      if field.is_repeated:
+      if field.label == descriptor.FieldDescriptor.LABEL_REPEATED:
         self.assertFalse(field.has_presence)
       else:
         self.assertTrue(field.has_presence)
@@ -2061,6 +2174,34 @@ class Proto3Test(unittest.TestCase):
     self.assertIs(submsg, msg.map_int32_foreign_message.get(5))
     with self.assertRaises(TypeError):
       msg.map_int32_foreign_message.get('')
+
+  # BEGIN GOOGLE-INTERNAL
+
+  def testMapSubscriptLeak(self):
+    msg = map_unittest_pb2.TestMap()
+    key = 'String key' * 100000
+    before = GetRssMb()
+
+    for _ in range(1000):
+      _ = msg.map_string_string[key]
+
+    after = GetRssMb()
+    # Very high bounds due to noisy and unpredictable nature of RSS.
+    self.assertLess(after - before, 500)
+
+  def testMapGetLeak(self):
+    msg = map_unittest_pb2.TestMap()
+    key = 'String key' * 100000
+    before = GetRssMb()
+
+    for _ in range(1000):
+      _ = msg.map_string_string.get(key)
+
+    after = GetRssMb()
+    # Very high bounds due to noisy and unpredictable nature of RSS.
+    self.assertLess(after - before, 500)
+
+  # END GOOGLE-INTERNAL
 
   def testScalarMap(self):
     msg = map_unittest_pb2.TestMap()
@@ -2699,20 +2840,6 @@ class Proto3Test(unittest.TestCase):
     msg.map_string_foreign_message['foo'].c = 5
     self.assertEqual(0, len(msg.FindInitializationErrors()))
 
-  def testMapStubReferenceSubMessageDestructor(self):
-    msg = map_unittest_pb2.TestMapSubmessage()
-    # A reference on map stub in sub message
-    map_ref = msg.test_map.map_int32_int32
-    # Make sure destructor after Clear the original message not crash
-    msg.Clear()
-
-  def testRepeatedStubReferenceSubMessageDestructor(self):
-    msg = unittest_pb2.NestedTestAllTypes()
-    # A reference on repeated stub in sub message
-    repeated_ref = msg.payload.repeated_int32
-    # Make sure destructor after Clear the original message not crash
-    msg.Clear()
-
   @unittest.skipIf(sys.maxunicode == UCS2_MAXUNICODE, 'Skip for ucs2')
   def testStrictUtf8Check(self):
     # Test u'\ud801' is rejected at parser in both python2 and python3.
@@ -2765,6 +2892,195 @@ class Proto3Test(unittest.TestCase):
     self.assertEqual(
         unittest_proto3_arena_pb2.TestAllTypes().optional_nested_message,
         unittest_proto3_arena_pb2.TestAllTypes().optional_nested_message)
+
+
+# BEGIN GOOGLE-INTERNAL
+
+
+# Several tests that use a different TestAllTypes proto that exercises different
+# corner cases.
+@parameterized.named_parameters(('_proto2', python_pb2),
+                                ('_proto3', python_proto3_pb2))
+@testing_refleaks.TestCase
+class MessageTestAlternateMessage(unittest.TestCase):
+  # The following tests exercises particulary tricky corners of the
+  # cpp implementation.
+
+  def testReleaseRepeatedScalarContainer(self, message_module):
+    """Exercise a scenario that has led to segfaults in the past."""
+    m = message_module.TestAllTypes()
+    r = m.repeated_nested_message
+    a = r.add()
+    cc = a.cc
+    cc.c = 3
+    d = cc.d
+    d.append(5)
+    self.assertEqual(len(d), 1)
+
+    # Deleting m should cause any of its children still referenced
+    # from Python code to be released.  If releasing isn't working
+    # properly, the append() below will segfault.
+    del m
+    d.append(5)
+    self.assertEqual(len(d), 2)
+
+  def testReleaseRepeatedCompositeContainer(self, message_module):
+    """Exercise a scenario that has led to segfaults in the past."""
+    m = message_module.TestAllTypes()
+    # The segfault only appeared if there was an external reference to
+    # the container itself e.g. if you replace the two lines below
+    # with
+    #     a = m.repeated_nested_message.add()
+    # the segfault would vanish.
+    r = m.repeated_nested_message
+    a = r.add()
+    cc = a.cc
+    cc.c = 3
+    self.assertEqual(3, cc.c)
+
+    # Deleting m should cause any of its children still referenced
+    # from Python code to be released.  If releasing isn't working
+    # properly, the attribute access below will segfault.
+    del m
+    self.assertEqual(3, cc.c)
+
+  def testClearRepeatedCompositeContainer(self, message_module):
+    """Clearing a field should release it from the parent."""
+    m = message_module.TestAllTypes()
+    r = m.repeated_nested_message
+    a = r.add()
+    cc = a.cc
+    cc.c = 3
+    # parent, without affecting the container itself (i.e. it should
+    # retain any elements and it should still be modifiable.)
+    m.ClearField('repeated_nested_message')
+    self.assertEqual(1, len(r))
+    self.assertEqual(3, cc.c)
+    r.add().cc.c = 4
+    self.assertEqual(2, len(r))
+
+  # TODO: Add test for clearing a RCC in an ExtensionDict
+
+  def testReleaseExtensionDict(self, unused_message_module):
+    """Exercise a scenario that has led to segfaults in the past."""
+    m = python_pb2.TestAllExtensions()
+    # The segfault only appeared if there was an external reference to
+    # the container itself e.g. if you replace the two lines below
+    # with
+    #     a = m.Extensions[python_pb2.optional_nested_message_extension]
+    # the segfault would vanish.
+    e = m.Extensions
+    self.assertEqual(e, m.Extensions)
+    self.assertNotEqual(e, 0)
+    with self.assertRaises(TypeError):
+      hash(e)
+    a = e[python_pb2.optional_nested_message_extension]
+    cc = a.cc
+    cc.c = 3
+    self.assertEqual(3, cc.c)
+
+    # Deleting m should cause any of its children still referenced
+    # from Python code to be released.  If releasing isn't working
+    # properly, the attribute access below will segfault.
+    del m
+    self.assertEqual(3, cc.c)
+
+  def testRepeatedCompositeContainerInExtension(self, unused_message_module):
+    """Exercise a scenario that has led to segfaults in the past."""
+    m = python_pb2.TestAllExtensions()
+    e = m.Extensions
+    a = e[python_pb2.repeated_nested_message_extension]
+    del e
+    cc = a.add().cc
+    cc.c = 3
+    self.assertEqual(3, cc.c)
+
+    # Deleting m should cause any of its children still referenced
+    # from Python code to be released.  If releasing isn't working
+    # properly, the attribute access below will segfault.
+    del m
+    self.assertEqual(3, cc.c)
+
+  def testReleaseExtensionDictWithRepeatedField(self, unused_message_module):
+    """Exercise a scenario that has led to segfaults in the past."""
+    m = python_pb2.TestAllExtensions()
+    e = m.Extensions
+    # Deleting m should cause any of its children still referenced
+    # from Python code to be released.  If releasing isn't working
+    # properly, the attribute access below will segfault.
+    del m
+    try:
+      e[python_pb2.repeated_nested_message_extension]
+    except KeyError:
+      # This is allowed behavior for the Cpp implementation.
+      pass
+
+  def testReleaseClearedExtensionDictWithRepeatedField(self,
+                                                       unused_message_module):
+    """Exercise a scenario that has led to segfaults in the past."""
+    m = python_pb2.TestAllExtensions()
+    m.Clear()
+    e = m.Extensions
+    del m
+    # Deleting m should cause any of its children still referenced
+    # from Python code to be released.  If releasing isn't working
+    # properly, the attribute access below will segfault.
+    try:
+      a = e[python_pb2.repeated_nested_message_extension]
+    except KeyError:
+      # This is allowed behavior for the Cpp implementation.
+      pass
+    else:
+      cc = a.add().cc
+      cc.c = 3
+      self.assertEqual(3, cc.c)
+
+  def testParsedMessageWithExtensions(self, message_module):
+    extension = python_pb2.repeated_nested_message_extension
+    m = python_pb2.TestAllExtensions()
+    m.Extensions[extension].add().cc.c = 3
+
+    # Recreate the message, but release it before we fetch any field.
+    # Data should be accessible even though the values were not cached.
+    def NewMessage():
+      return python_pb2.TestAllExtensions.FromString(m.SerializeToString())
+
+    self.assertEqual(NewMessage().Extensions[extension][0].cc.c, 3)
+
+  def testModifyReleasedRepeatedCompositeContainer(self, message_module):
+    """Exercise a scenario that has led to segfaults in the past."""
+    m = message_module.TestAllTypes()
+    r = m.repeated_nested_message
+    r.add()
+    self.assertEqual(1, len(r))
+
+    # Deleting m should cause r to be released.  If releasing isn't
+    # working properly, the add() below will segfault.
+    del m
+    r.add()
+    self.assertEqual(2, len(r))
+
+  def testClearRepeatedField(self, message_module):
+    """Clearing a repeated field should detach it from the message,
+
+    not modify the content of the repeated field.
+
+    The Python API differs from the C++ here, as the latter would
+    clear the repeated field's *contents*.
+    """
+    m = message_module.TestAllTypes()
+    r = m.repeated_nested_message
+    r.add()
+    self.assertEqual(1, len(r))
+    m.ClearField('repeated_nested_message')
+    self.assertEqual(1, len(r))
+
+  def testIsInstance(self, message_module):
+    m = message_module.TestAllTypes()
+    self.assertTrue(isinstance(m, message.Message))
+
+
+# END GOOGLE-INTERNAL
 
 
 @testing_refleaks.TestCase
@@ -2873,8 +3189,6 @@ class PackedFieldTest(unittest.TestCase):
     self.assertEqual(golden_data, message.SerializeToString())
 
 
-@unittest.skipIf(api_implementation.Type() == 'python',
-                 'explicit tests of the C++ implementation')
 @testing_refleaks.TestCase
 class OversizeProtosTest(unittest.TestCase):
 
@@ -2891,17 +3205,149 @@ class OversizeProtosTest(unittest.TestCase):
     msg.ParseFromString(self.GenerateNestedProto(100))
 
   def testAssertOversizeProto(self):
-    api_implementation._c_module.SetAllowOversizeProtos(False)
+    if api_implementation.Type() != 'python':
+      api_implementation._c_module.SetAllowOversizeProtos(False)
     msg = unittest_pb2.TestRecursiveMessage()
     with self.assertRaises(message.DecodeError) as context:
       msg.ParseFromString(self.GenerateNestedProto(101))
     self.assertIn('Error parsing message', str(context.exception))
 
   def testSucceedOversizeProto(self):
-    api_implementation._c_module.SetAllowOversizeProtos(True)
+
+    if api_implementation.Type() == 'python':
+      decoder.SetRecursionLimit(310)
+    else:
+      api_implementation._c_module.SetAllowOversizeProtos(True)
+
     msg = unittest_pb2.TestRecursiveMessage()
     msg.ParseFromString(self.GenerateNestedProto(101))
+    decoder.SetRecursionLimit(decoder.DEFAULT_RECURSION_LIMIT)
+
+
+# BEGIN GOOGLE-INTERNAL
+# TODO: Remove GOOGLE-INTERNAL once support for <py3.10 is dropped.
+@testing_refleaks.TestCase
+class StructuralPatternMatching(unittest.TestCase):
+
+  def testScalarSequenceFullMatch(self) -> None:
+    msg = unittest_pb2.TestAllTypes(
+        repeated_int32=(1, 2, 3),
+    )
+
+    match msg:
+      case unittest_pb2.TestAllTypes(repeated_int32=(9, 8, 7)):
+        actual_match_result = msg.repeated_int32
+      case unittest_pb2.TestAllTypes(repeated_int32=(1, 2)):
+        actual_match_result = msg.repeated_int32
+      case unittest_pb2.TestAllTypes(repeated_int32=(1, 2, 3)):
+        actual_match_result = msg.repeated_int32
+      case _:
+        actual_match_result = None
+
+    self.assertSequenceEqual(actual_match_result, (1, 2, 3))
+
+  def testScalarSequencePartialMatch(self) -> None:
+    msg = unittest_pb2.TestAllTypes(
+        repeated_int32=(1, 2, 3),
+    )
+
+    match msg:
+      case unittest_pb2.TestAllTypes(repeated_int32=(9, *rest)):
+        actual_match_init = 9
+        actual_match_rest = rest
+      case unittest_pb2.TestAllTypes(repeated_int32=(1, *rest)):
+        actual_match_init = 1
+        actual_match_rest = rest
+      case _:
+        actual_match_init = None
+        actual_match_rest = None
+
+    self.assertEqual(actual_match_init, 1)
+    self.assertSequenceEqual(actual_match_rest, (2, 3))
+
+  def testMsgSequenceFullMatch(self) -> None:
+    msg = unittest_pb2.TestAllTypes(
+        repeated_nested_message=(
+            unittest_pb2.TestAllTypes.NestedMessage(bb=1),
+            unittest_pb2.TestAllTypes.NestedMessage(bb=2),
+            unittest_pb2.TestAllTypes.NestedMessage(bb=3),
+        )
+    )
+
+    match msg:
+      case unittest_pb2.TestAllTypes(
+          repeated_nested_message=(
+              unittest_pb2.TestAllTypes.NestedMessage(bb=9),
+              unittest_pb2.TestAllTypes.NestedMessage(bb=8),
+              unittest_pb2.TestAllTypes.NestedMessage(bb=7),
+          )
+      ):
+        actual_match_result = (9, 8, 7)
+      case unittest_pb2.TestAllTypes(
+          repeated_nested_message=(
+              unittest_pb2.TestAllTypes.NestedMessage(bb=1),
+              unittest_pb2.TestAllTypes.NestedMessage(bb=2),
+          )
+      ):
+        actual_match_result = (1, 2)
+      case unittest_pb2.TestAllTypes(
+          repeated_nested_message=(
+              unittest_pb2.TestAllTypes.NestedMessage(bb=1),
+              unittest_pb2.TestAllTypes.NestedMessage(bb=2),
+              unittest_pb2.TestAllTypes.NestedMessage(bb=3),
+          )
+      ):
+        actual_match_result = (1, 2, 3)
+      case _:
+        actual_match_result = None
+
+    self.assertSequenceEqual(actual_match_result, (1, 2, 3))
+
+  def testMsgSequencePartialMatch(self) -> None:
+    msg = unittest_pb2.TestAllTypes(
+        repeated_nested_message=(
+            unittest_pb2.TestAllTypes.NestedMessage(bb=1),
+            unittest_pb2.TestAllTypes.NestedMessage(bb=2),
+            unittest_pb2.TestAllTypes.NestedMessage(bb=3),
+        )
+    )
+
+    match msg:
+      case unittest_pb2.TestAllTypes(
+          repeated_nested_message=(
+              unittest_pb2.TestAllTypes.NestedMessage(bb=9),
+              *rest,
+          )
+      ):
+        actual_match_init = 9
+        actual_match_rest = rest
+      case unittest_pb2.TestAllTypes(
+          repeated_nested_message=(
+              unittest_pb2.TestAllTypes.NestedMessage(bb=1),
+              *rest,
+          )
+      ):
+        actual_match_init = 1
+        actual_match_rest = rest
+      case _:
+        actual_match_init = None
+        actual_match_rest = None
+
+    self.assertEqual(actual_match_init, 1)
+    self.assertSequenceEqual(
+        actual_match_rest,
+        (
+            unittest_pb2.TestAllTypes.NestedMessage(bb=2),
+            unittest_pb2.TestAllTypes.NestedMessage(bb=3),
+        ),
+    )
+# END GOOGLE-INTERNAL
 
 
 if __name__ == '__main__':
+  # BEGIN GOOGLE-INTERNAL
+  # We use unittest.main() here to make sure flags parsing and InitGoogle() is
+  # called for py-wrapped File APIs. The unittest.main() below will be
+  # replaced by unittest.main() in opensource.
+  # END GOOGLE-INTERNAL
   unittest.main()
