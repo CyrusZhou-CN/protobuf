@@ -46,7 +46,7 @@ struct Options {
 class Context final {
  public:
   Context(const FileDescriptor* file, io::ZeroCopyOutputStream* stream,
-          const Options& options)
+          Options options)
       : stream_(stream), printer_(stream_), options_(options) {
     BuildDefPool(file);
   }
@@ -89,7 +89,7 @@ class Context final {
 
   io::ZeroCopyOutputStream* stream_;
   io::Printer printer_;
-  const Options& options_;
+  Options options_;
   upb::DefPool pool_;
 };
 
