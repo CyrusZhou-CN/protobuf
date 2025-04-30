@@ -8,6 +8,8 @@
 #ifndef UPB_MEM_ALLOC_H_
 #define UPB_MEM_ALLOC_H_
 
+#include <stddef.h>
+
 // Must be last.
 #include "upb/port/def.inc"
 
@@ -20,9 +22,10 @@ typedef struct upb_alloc upb_alloc;
 /* A combined `malloc()`/`free()` function.
  * If `size` is 0 then the function acts like `free()`, otherwise it acts like
  * `realloc()`.  Only `oldsize` bytes from a previous allocation are
- * preserved. */
+ * preserved. If `actual_size` is not null and the return value is not null, the
+ * actual size of the resulting allocation is stored in `actual_size`. */
 typedef void* upb_alloc_func(upb_alloc* alloc, void* ptr, size_t oldsize,
-                             size_t size);
+                             size_t size, size_t* actual_size);
 
 /* A upb_alloc is a possibly-stateful allocator object.
  *
@@ -36,23 +39,23 @@ struct upb_alloc {
 
 UPB_INLINE void* upb_malloc(upb_alloc* alloc, size_t size) {
   UPB_ASSERT(alloc);
-  return alloc->func(alloc, NULL, 0, size);
+  return alloc->func(alloc, NULL, 0, size, NULL);
 }
 
 UPB_INLINE void* upb_realloc(upb_alloc* alloc, void* ptr, size_t oldsize,
                              size_t size) {
   UPB_ASSERT(alloc);
-  return alloc->func(alloc, ptr, oldsize, size);
+  return alloc->func(alloc, ptr, oldsize, size, NULL);
 }
 
 UPB_INLINE void upb_free(upb_alloc* alloc, void* ptr) {
   UPB_ASSERT(alloc);
-  alloc->func(alloc, ptr, 0, 0);
+  alloc->func(alloc, ptr, 0, 0, NULL);
 }
 
 UPB_INLINE void upb_free_sized(upb_alloc* alloc, void* ptr, size_t size) {
   UPB_ASSERT(alloc);
-  alloc->func(alloc, ptr, size, 0);
+  alloc->func(alloc, ptr, size, 0, NULL);
 }
 
 // The global allocator used by upb. Uses the standard malloc()/free().

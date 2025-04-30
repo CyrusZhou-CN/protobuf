@@ -13,15 +13,21 @@
 #include "upb/port/def.inc"
 
 static void* upb_global_allocfunc(upb_alloc* alloc, void* ptr, size_t oldsize,
-                                  size_t size) {
+                                  size_t size, size_t* actual_size) {
   UPB_UNUSED(alloc);
   UPB_UNUSED(oldsize);
   if (size == 0) {
     free(ptr);
+    if (actual_size != NULL) {
+      *actual_size = 0;
+    }
     return NULL;
-  } else {
-    return realloc(ptr, size);
   }
+  void* newptr = realloc(ptr, size);
+  if (actual_size != NULL) {
+    *actual_size = newptr != NULL ? size : 0;
+  }
+  return newptr;
 }
 
 upb_alloc upb_alloc_global = {&upb_global_allocfunc};
