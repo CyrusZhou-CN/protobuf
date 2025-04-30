@@ -7,6 +7,15 @@
 
 syntax = "proto2";
 
+// BEGIN GOOGLE-INTERNAL
+// Test generated code works well when import from third_party/py/
+// See http://go/ThirdPartyPython
+import public "third_party/py/protobuf_json/test2.proto";
+
+import "third_party/py/protobuf_json/test.proto";
+
+// END GOOGLE-INTERNAL
+
 package google.protobuf.python.internal;
 
 message TestEnumValues {
@@ -31,3 +40,9 @@ message TestMissingEnumValues {
 message JustString {
   optional string dummy = 1;
 }
+
+// BEGIN GOOGLE-INTERNAL
+message ThirdPartyMessage {
+  optional protobuf_json_test.TestMessage test_message = 1;
+}
+// END GOOGLE-INTERNAL

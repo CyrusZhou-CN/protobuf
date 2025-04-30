@@ -12,6 +12,11 @@ package pb;
 import "google/protobuf/descriptor.proto";
 
 option go_package = "google.golang.org/protobuf/types/gofeaturespb";
+// BEGIN GOOGLE-INTERNAL
+// Required for Prototiller.
+option java_package = "com.google.protobuf";
+option java_outer_classname = "GoFeaturesProto";
+// END GOOGLE-INTERNAL
 
 extend google.protobuf.FeatureSet {
   optional GoFeatures go = 1002;

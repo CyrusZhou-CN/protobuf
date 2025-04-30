@@ -472,9 +472,6 @@ message FileOptions {
   // top-level extensions defined in the file.
   optional bool java_multiple_files = 10 [default = false];
 
-  // This option does nothing.
-  optional bool java_generate_equals_and_hash = 20 [deprecated=true];
-
   // A proto2 file can set this to true to opt in to UTF-8 checking for Java,
   // which will throw an exception if invalid UTF-8 is parsed from the wire or
   // assigned to a string field.
@@ -1063,7 +1060,6 @@ message FeatureSet {
     UTF8_VALIDATION_UNKNOWN = 0;
     VERIFY = 2;
     NONE = 3;
-    reserved 1;
   }
   optional Utf8Validation utf8_validation = 4 [
     retention = RETENTION_RUNTIME,
