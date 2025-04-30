@@ -46,6 +46,7 @@ set(libprotobuf_srcs
   ${protobuf_SOURCE_DIR}/src/google/protobuf/generated_message_util.cc
   ${protobuf_SOURCE_DIR}/src/google/protobuf/implicit_weak_message.cc
   ${protobuf_SOURCE_DIR}/src/google/protobuf/inlined_string_field.cc
+  ${protobuf_SOURCE_DIR}/src/google/protobuf/internal_feature_helper.cc
   ${protobuf_SOURCE_DIR}/src/google/protobuf/io/coded_stream.cc
   ${protobuf_SOURCE_DIR}/src/google/protobuf/io/gzip_stream.cc
   ${protobuf_SOURCE_DIR}/src/google/protobuf/io/io_win32.cc
@@ -137,6 +138,7 @@ set(libprotobuf_hdrs
   ${protobuf_SOURCE_DIR}/src/google/protobuf/has_bits.h
   ${protobuf_SOURCE_DIR}/src/google/protobuf/implicit_weak_message.h
   ${protobuf_SOURCE_DIR}/src/google/protobuf/inlined_string_field.h
+  ${protobuf_SOURCE_DIR}/src/google/protobuf/internal_feature_helper.h
   ${protobuf_SOURCE_DIR}/src/google/protobuf/internal_visibility.h
   ${protobuf_SOURCE_DIR}/src/google/protobuf/io/coded_stream.h
   ${protobuf_SOURCE_DIR}/src/google/protobuf/io/gzip_stream.h
@@ -197,6 +199,7 @@ set(libprotobuf_hdrs
   ${protobuf_SOURCE_DIR}/src/google/protobuf/util/delimited_message_util.h
   ${protobuf_SOURCE_DIR}/src/google/protobuf/util/field_comparator.h
   ${protobuf_SOURCE_DIR}/src/google/protobuf/util/field_mask_util.h
+  ${protobuf_SOURCE_DIR}/src/google/protobuf/util/internal_timeval.h
   ${protobuf_SOURCE_DIR}/src/google/protobuf/util/json_util.h
   ${protobuf_SOURCE_DIR}/src/google/protobuf/util/message_differencer.h
   ${protobuf_SOURCE_DIR}/src/google/protobuf/util/time_util.h
@@ -376,7 +379,6 @@ set(libprotoc_srcs
   ${protobuf_SOURCE_DIR}/src/google/protobuf/compiler/cpp/message.cc
   ${protobuf_SOURCE_DIR}/src/google/protobuf/compiler/cpp/message_layout_helper.cc
   ${protobuf_SOURCE_DIR}/src/google/protobuf/compiler/cpp/namespace_printer.cc
-  ${protobuf_SOURCE_DIR}/src/google/protobuf/compiler/cpp/padding_optimizer.cc
   ${protobuf_SOURCE_DIR}/src/google/protobuf/compiler/cpp/parse_function_generator.cc
   ${protobuf_SOURCE_DIR}/src/google/protobuf/compiler/cpp/service.cc
   ${protobuf_SOURCE_DIR}/src/google/protobuf/compiler/cpp/tracker.cc
@@ -698,7 +700,6 @@ set(libupb_srcs
   ${protobuf_SOURCE_DIR}/upb/wire/decode.c
   ${protobuf_SOURCE_DIR}/upb/wire/encode.c
   ${protobuf_SOURCE_DIR}/upb/wire/eps_copy_input_stream.c
-  ${protobuf_SOURCE_DIR}/upb/wire/internal/decode_fast.c
   ${protobuf_SOURCE_DIR}/upb/wire/reader.c
 )
 
@@ -817,7 +818,6 @@ set(libupb_hdrs
   ${protobuf_SOURCE_DIR}/upb/wire/decode.h
   ${protobuf_SOURCE_DIR}/upb/wire/encode.h
   ${protobuf_SOURCE_DIR}/upb/wire/eps_copy_input_stream.h
-  ${protobuf_SOURCE_DIR}/upb/wire/internal/decode_fast.h
   ${protobuf_SOURCE_DIR}/upb/wire/reader.h
   ${protobuf_SOURCE_DIR}/upb/wire/types.h
 )
@@ -852,6 +852,7 @@ set(protoc-gen-upb_srcs
   ${protobuf_SOURCE_DIR}/src/google/protobuf/generated_message_util.cc
   ${protobuf_SOURCE_DIR}/src/google/protobuf/implicit_weak_message.cc
   ${protobuf_SOURCE_DIR}/src/google/protobuf/inlined_string_field.cc
+  ${protobuf_SOURCE_DIR}/src/google/protobuf/internal_feature_helper.cc
   ${protobuf_SOURCE_DIR}/src/google/protobuf/io/coded_stream.cc
   ${protobuf_SOURCE_DIR}/src/google/protobuf/io/gzip_stream.cc
   ${protobuf_SOURCE_DIR}/src/google/protobuf/io/io_win32.cc
@@ -931,6 +932,7 @@ set(protoc-gen-upb_hdrs
   ${protobuf_SOURCE_DIR}/src/google/protobuf/has_bits.h
   ${protobuf_SOURCE_DIR}/src/google/protobuf/implicit_weak_message.h
   ${protobuf_SOURCE_DIR}/src/google/protobuf/inlined_string_field.h
+  ${protobuf_SOURCE_DIR}/src/google/protobuf/internal_feature_helper.h
   ${protobuf_SOURCE_DIR}/src/google/protobuf/internal_visibility.h
   ${protobuf_SOURCE_DIR}/src/google/protobuf/io/coded_stream.h
   ${protobuf_SOURCE_DIR}/src/google/protobuf/io/gzip_stream.h
@@ -1021,6 +1023,7 @@ set(protoc-gen-upbdefs_srcs
   ${protobuf_SOURCE_DIR}/src/google/protobuf/generated_message_util.cc
   ${protobuf_SOURCE_DIR}/src/google/protobuf/implicit_weak_message.cc
   ${protobuf_SOURCE_DIR}/src/google/protobuf/inlined_string_field.cc
+  ${protobuf_SOURCE_DIR}/src/google/protobuf/internal_feature_helper.cc
   ${protobuf_SOURCE_DIR}/src/google/protobuf/io/coded_stream.cc
   ${protobuf_SOURCE_DIR}/src/google/protobuf/io/gzip_stream.cc
   ${protobuf_SOURCE_DIR}/src/google/protobuf/io/io_win32.cc
@@ -1101,6 +1104,7 @@ set(protoc-gen-upbdefs_hdrs
   ${protobuf_SOURCE_DIR}/src/google/protobuf/has_bits.h
   ${protobuf_SOURCE_DIR}/src/google/protobuf/implicit_weak_message.h
   ${protobuf_SOURCE_DIR}/src/google/protobuf/inlined_string_field.h
+  ${protobuf_SOURCE_DIR}/src/google/protobuf/internal_feature_helper.h
   ${protobuf_SOURCE_DIR}/src/google/protobuf/internal_visibility.h
   ${protobuf_SOURCE_DIR}/src/google/protobuf/io/coded_stream.h
   ${protobuf_SOURCE_DIR}/src/google/protobuf/io/gzip_stream.h
@@ -1294,18 +1298,14 @@ set(common_test_hdrs
 
 # @//pkg:lite_test_util
 set(lite_test_util_srcs
-  ${protobuf_SOURCE_DIR}/src/google/protobuf/map_lite_test_util.cc
   ${protobuf_SOURCE_DIR}/src/google/protobuf/test_util_lite.cc
 )
 
 # @//pkg:lite_test_util
 set(lite_test_util_hdrs
   ${protobuf_SOURCE_DIR}/src/google/protobuf/arena_test_util.h
-  ${protobuf_SOURCE_DIR}/src/google/protobuf/map_lite_test_util.h
-  ${protobuf_SOURCE_DIR}/src/google/protobuf/map_test_util_impl.h
+  ${protobuf_SOURCE_DIR}/src/google/protobuf/map_test_util.h
   ${protobuf_SOURCE_DIR}/src/google/protobuf/proto3_lite_unittest.inc
-  ${protobuf_SOURCE_DIR}/src/google/protobuf/test_util.inc
-  ${protobuf_SOURCE_DIR}/src/google/protobuf/test_util2.h
   ${protobuf_SOURCE_DIR}/src/google/protobuf/test_util_lite.h
 )
 
@@ -1325,16 +1325,14 @@ set(test_util_hdrs
   ${protobuf_SOURCE_DIR}/src/google/protobuf/compiler/cpp/unittest.inc
   ${protobuf_SOURCE_DIR}/src/google/protobuf/io/test_zero_copy_stream.h
   ${protobuf_SOURCE_DIR}/src/google/protobuf/map_test.inc
-  ${protobuf_SOURCE_DIR}/src/google/protobuf/map_test_util.h
-  ${protobuf_SOURCE_DIR}/src/google/protobuf/map_test_util.inc
   ${protobuf_SOURCE_DIR}/src/google/protobuf/message_unittest.inc
   ${protobuf_SOURCE_DIR}/src/google/protobuf/message_unittest_legacy_apis.inc
   ${protobuf_SOURCE_DIR}/src/google/protobuf/reflection_tester.h
   ${protobuf_SOURCE_DIR}/src/google/protobuf/repeated_field_reflection_unittest.inc
   ${protobuf_SOURCE_DIR}/src/google/protobuf/test_util.h
-  ${protobuf_SOURCE_DIR}/src/google/protobuf/test_util.inc
+  ${protobuf_SOURCE_DIR}/src/google/protobuf/test_util2.h
   ${protobuf_SOURCE_DIR}/src/google/protobuf/unredacted_debug_format_for_test.h
-  ${protobuf_SOURCE_DIR}/src/google/protobuf/wire_format_unittest.inc
+  ${protobuf_SOURCE_DIR}/src/google/protobuf/wire_format_unittest.h
 )
 
 # @//upb:test_util
@@ -1426,6 +1424,7 @@ set(protobuf_test_files
   ${protobuf_SOURCE_DIR}/src/google/protobuf/generated_message_tctable_lite_test.cc
   ${protobuf_SOURCE_DIR}/src/google/protobuf/has_bits_test.cc
   ${protobuf_SOURCE_DIR}/src/google/protobuf/inlined_string_field_unittest.cc
+  ${protobuf_SOURCE_DIR}/src/google/protobuf/internal_feature_helper_test.cc
   ${protobuf_SOURCE_DIR}/src/google/protobuf/internal_message_util_unittest.cc
   ${protobuf_SOURCE_DIR}/src/google/protobuf/map_field_test.cc
   ${protobuf_SOURCE_DIR}/src/google/protobuf/map_test.cc
@@ -1457,6 +1456,11 @@ set(protobuf_test_files
   ${protobuf_SOURCE_DIR}/src/google/protobuf/varint_shuffle_test.cc
   ${protobuf_SOURCE_DIR}/src/google/protobuf/well_known_types_unittest.cc
   ${protobuf_SOURCE_DIR}/src/google/protobuf/wire_format_unittest.cc
+)
+
+# @//src/google/protobuf:lazily_build_dependencies_test_srcs
+set(lazily_build_dependencies_test_files
+  ${protobuf_SOURCE_DIR}/src/google/protobuf/lazily_build_dependencies_test.cc
 )
 
 # @//src/google/protobuf:test_proto_all_srcs
@@ -1563,7 +1567,8 @@ set(compiler_test_files
 
 # @//src/google/protobuf/compiler:test_proto_srcs
 set(compiler_test_protos_files
-  ${protobuf_SOURCE_DIR}/src/google/protobuf/compiler/cpp/test_bad_identifiers.proto
+  ${protobuf_SOURCE_DIR}/src/google/protobuf/compiler/cpp/test_bad_identifiers_editions.proto
+  ${protobuf_SOURCE_DIR}/src/google/protobuf/compiler/cpp/test_bad_identifiers_proto2.proto
   ${protobuf_SOURCE_DIR}/src/google/protobuf/compiler/cpp/test_large_enum_value.proto
   ${protobuf_SOURCE_DIR}/src/google/protobuf/compiler/java/message_serialization_unittest.proto
 )

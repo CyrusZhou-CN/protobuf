@@ -83,8 +83,10 @@ class DescriptorPool;
 // Defined in descriptor.proto
 #ifndef SWIG
 enum Edition : int;
+enum SymbolVisibility : int;
 #else   // !SWIG
 typedef int Edition;
+typedef int SymbolVisibility;
 #endif  // !SWIG
 class DescriptorProto;
 class DescriptorProto_ExtensionRange;
@@ -145,6 +147,10 @@ class ValidationErrorTest;
 namespace io {
 class Printer;
 }  // namespace io
+
+namespace internal {
+class InternalFeatureHelper;
+}  // namespace internal
 
 // NB, all indices are zero-based.
 struct SourceLocation {
@@ -250,7 +256,7 @@ class DescriptorNames {
   }
 
  private:
-  uint16_t get_size(int index) const {
+  size_t get_size(int index) const {
     // We don't use `uint16_t` in the payload type to avoid having to align it.
     // Instead, we read via memcpy.
     uint16_t size;
@@ -258,7 +264,7 @@ class DescriptorNames {
     return size;
   }
 
-  absl::string_view get(uint16_t offset, uint16_t size) const {
+  absl::string_view get(size_t offset, size_t size) const {
     return absl::string_view(payload_ - offset, size);
   }
 
@@ -317,41 +323,6 @@ class PROTOBUF_EXPORT SymbolBase {
 // See BuildEnumValue for details.
 template <int N>
 class PROTOBUF_EXPORT SymbolBaseN : public SymbolBase {};
-
-// This class is for internal use only and provides access to the resolved
-// runtime FeatureSets of any descriptor.  These features are not designed
-// to be stable, and depending directly on them (vs the public descriptor APIs)
-// is not safe.
-class PROTOBUF_EXPORT InternalFeatureHelper {
- public:
-  template <typename DescriptorT>
-  static const FeatureSet& GetFeatures(const DescriptorT& desc) {
-    return desc.features();
-  }
-
- private:
-  friend class ::google::protobuf::compiler::CodeGenerator;
-  friend class ::google::protobuf::compiler::CommandLineInterface;
-
-  // Provides a restricted view exclusively to code generators to query their
-  // own unresolved features.  Unresolved features are virtually meaningless to
-  // everyone else. Code generators will need them to validate their own
-  // features, and runtimes may need them internally to be able to properly
-  // represent the original proto files from generated code.
-  template <typename DescriptorT, typename TypeTraitsT, uint8_t field_type,
-            bool is_packed>
-  static typename TypeTraitsT::ConstType GetUnresolvedFeatures(
-      const DescriptorT& descriptor,
-      const google::protobuf::internal::ExtensionIdentifier<
-          FeatureSet, TypeTraitsT, field_type, is_packed>& extension) {
-    return descriptor.proto_features_->GetExtension(extension);
-  }
-
-  // Provides a restricted view exclusively to code generators to query the
-  // edition of files being processed.  While most people should never write
-  // edition-dependent code, generators frequently will need to.
-  static Edition GetEdition(const FileDescriptor& desc);
-};
 
 PROTOBUF_EXPORT absl::string_view ShortEditionName(Edition edition);
 
@@ -746,12 +717,17 @@ class PROTOBUF_EXPORT Descriptor : private internal::SymbolBase {
   // to this descriptor from the file root.
   void GetLocationPath(std::vector<int>* output) const;
 
+  // visibility declared on the message
+  SymbolVisibility visibility_keyword() const;
+
   // True if this is a placeholder for an unknown type.
   bool is_placeholder_ : 1;
   // True if this is a placeholder and the type name wasn't fully-qualified.
   bool is_unqualified_placeholder_ : 1;
   // Well known type.  Stored like this to conserve space.
   uint8_t well_known_type_ : 5;
+  // bitfield representation of SymbolVisibility, which only requires 2 bits
+  uint8_t visibility_ : 2;
 
   // This points to the last field _number_ that is part of the sequence
   // starting at 1, where
@@ -806,7 +782,7 @@ class PROTOBUF_EXPORT Descriptor : private internal::SymbolBase {
   friend class FileDescriptor;
 };
 
-PROTOBUF_INTERNAL_CHECK_CLASS_SIZE(Descriptor, 152);
+PROTOBUF_INTERNAL_CHECK_CLASS_SIZE(Descriptor, 160);
 
 // Describes a single field of a message.  To get the descriptor for a given
 // field, first get the Descriptor for the message in which it is defined,
@@ -1530,10 +1506,16 @@ class PROTOBUF_EXPORT EnumDescriptor : private internal::SymbolBase {
   // to this descriptor from the file root.
   void GetLocationPath(std::vector<int>* output) const;
 
+  // visibility declared on the enum
+  SymbolVisibility visibility_keyword() const;
+
   // True if this is a placeholder for an unknown type.
   bool is_placeholder_ : 1;
   // True if this is a placeholder and the type name wasn't fully-qualified.
   bool is_unqualified_placeholder_ : 1;
+
+  // bitfield representation of SymbolVisibility, which only requires 2 bits
+  uint8_t visibility_ : 2;
 
   // This points to the last value _index_ that is part of the sequence starting
   // with the first label, where
@@ -1938,6 +1920,15 @@ class PROTOBUF_EXPORT FileDescriptor : private internal::SymbolBase {
   // These are returned in the order they were defined in the .proto file.
   const FileDescriptor* weak_dependency(int index) const;
 
+  // The number of files that are imported for options.
+  // The option dependency list is separate from the dependency list.
+  int option_dependency_count() const;
+  // Gets name of an option imported file by index, where
+  //     0 <= index < option_dependency_count()
+  // These are returned in the relative order they were defined in the .proto
+  // file.
+  absl::string_view option_dependency_name(int index) const;
+
   // Number of top-level message types defined in this file.  (This does not
   // include nested types.)
   int message_type_count() const;
@@ -2077,6 +2068,7 @@ class PROTOBUF_EXPORT FileDescriptor : private internal::SymbolBase {
   int dependency_count_;
   int public_dependency_count_;
   int weak_dependency_count_;
+  int option_dependency_count_;
   int message_type_count_;
   int enum_type_count_;
   int service_count_;
@@ -2084,6 +2076,8 @@ class PROTOBUF_EXPORT FileDescriptor : private internal::SymbolBase {
   mutable const FileDescriptor** dependencies_;
   int* public_dependencies_;
   int* weak_dependencies_;
+  absl::string_view* option_dependencies_;
+
   Descriptor* message_types_;
   EnumDescriptor* enum_types_;
   ServiceDescriptor* services_;
@@ -2112,7 +2106,7 @@ class PROTOBUF_EXPORT FileDescriptor : private internal::SymbolBase {
   friend class ServiceDescriptor;
 };
 
-PROTOBUF_INTERNAL_CHECK_CLASS_SIZE(FileDescriptor, 168);
+PROTOBUF_INTERNAL_CHECK_CLASS_SIZE(FileDescriptor, 184);
 
 #ifndef SWIG
 enum class ExtDeclEnforcementLevel : uint8_t {
@@ -2349,6 +2343,11 @@ class PROTOBUF_EXPORT DescriptorPool {
   // of this enforcement.
   void EnforceNamingStyle(bool enforce) { enforce_naming_style_ = enforce; }
 
+  // By default, option imports are allowed to be missing.
+  // If you call EnforceOptionDependencies(true), however, the DescriptorPool
+  // will report a import not found error.
+  void EnforceOptionDependencies(bool enforce) { enforce_option_ = enforce; }
+
   // Sets the default feature mappings used during the build. If this function
   // isn't called, the C++ feature set defaults are used.  If this function is
   // called, these defaults will be used instead.
@@ -2518,6 +2517,7 @@ class PROTOBUF_EXPORT DescriptorPool {
   friend class google::protobuf::descriptor_unittest::ValidationErrorTest;
   friend class ::google::protobuf::compiler::CommandLineInterface;
   friend class TextFormat;
+  friend Reflection;
 
   struct MemoBase {
     virtual ~MemoBase() = default;
@@ -2527,28 +2527,30 @@ class PROTOBUF_EXPORT DescriptorPool {
     T value;
   };
 
-  // Memoize a projection of a field.  This is used to cache the results of
-  // calling a function on a field, used for expensive descriptor calculations.
-  template <typename Func>
-  const auto& MemoizeProjection(const FieldDescriptor* field, Func func) const {
-    using ResultT = std::decay_t<decltype(func(field))>;
-    ABSL_DCHECK(field->file()->pool() == this);
+  // Memoize a projection of a descriptor. This is used to cache the results of
+  // calling a function on a descriptor, used for expensive descriptor
+  // calculations.
+  template <typename Desc, typename Func>
+  static const auto& MemoizeProjection(const Desc* descriptor, Func func) {
+    using ResultT = std::decay_t<decltype(func(descriptor))>;
+    auto* pool = descriptor->file()->pool();
     static_assert(std::is_empty_v<Func>);
     // This static bool is unique per-Func, so its address can be used as a key.
     static bool type_key;
-    auto key = std::pair<const void*, const void*>(field, &type_key);
+    auto key = std::pair<const void*, const void*>(descriptor, &type_key);
     {
-      absl::ReaderMutexLock lock(&field_memo_table_mutex_);
-      auto it = field_memo_table_->find(key);
-      if (it != field_memo_table_->end()) {
+      absl::ReaderMutexLock lock(&pool->field_memo_table_mutex_);
+      auto it = pool->field_memo_table_->find(key);
+      if (it != pool->field_memo_table_->end()) {
         return internal::DownCast<const MemoData<ResultT>&>(*it->second).value;
       }
     }
     auto result = std::make_unique<MemoData<ResultT>>();
-    result->value = func(field);
+    result->value = func(descriptor);
     {
-      absl::MutexLock lock(&field_memo_table_mutex_);
-      auto insert_result = field_memo_table_->insert({key, std::move(result)});
+      absl::MutexLock lock(&pool->field_memo_table_mutex_);
+      auto insert_result =
+          pool->field_memo_table_->insert({key, std::move(result)});
       auto it = insert_result.first;
       return internal::DownCast<const MemoData<ResultT>&>(*it->second).value;
     }
@@ -2645,6 +2647,7 @@ class PROTOBUF_EXPORT DescriptorPool {
   bool lazily_build_dependencies_;
   bool allow_unknown_;
   bool enforce_weak_;
+  bool enforce_option_ = false;
   ExtDeclEnforcementLevel enforce_extension_declarations_;
   bool disallow_enforce_utf8_;
   bool deprecated_legacy_json_field_conflicts_;
@@ -2796,6 +2799,7 @@ PROTOBUF_DEFINE_ACCESSOR(FileDescriptor, pool, const DescriptorPool*)
 PROTOBUF_DEFINE_ACCESSOR(FileDescriptor, dependency_count, int)
 PROTOBUF_DEFINE_ACCESSOR(FileDescriptor, public_dependency_count, int)
 PROTOBUF_DEFINE_ACCESSOR(FileDescriptor, weak_dependency_count, int)
+PROTOBUF_DEFINE_ACCESSOR(FileDescriptor, option_dependency_count, int)
 PROTOBUF_DEFINE_ACCESSOR(FileDescriptor, message_type_count, int)
 PROTOBUF_DEFINE_ACCESSOR(FileDescriptor, enum_type_count, int)
 PROTOBUF_DEFINE_ACCESSOR(FileDescriptor, service_count, int)
@@ -2894,7 +2898,13 @@ inline const Descriptor* FieldDescriptor::extension_scope() const {
 }
 
 inline FieldDescriptor::Label FieldDescriptor::label() const {
-  return static_cast<Label>(label_);
+  if (is_required()) {
+    return LABEL_REQUIRED;
+  } else if (is_repeated()) {
+    return LABEL_REPEATED;
+  } else {
+    return LABEL_OPTIONAL;
+  }
 }
 
 inline FieldDescriptor::Type FieldDescriptor::type() const {
@@ -2902,11 +2912,11 @@ inline FieldDescriptor::Type FieldDescriptor::type() const {
 }
 
 inline bool FieldDescriptor::is_optional() const {
-  return label() == LABEL_OPTIONAL;
+  return static_cast<Label>(label_) == LABEL_OPTIONAL;
 }
 
 inline bool FieldDescriptor::is_repeated() const {
-  ABSL_DCHECK_EQ(is_repeated_, label() == LABEL_REPEATED);
+  ABSL_DCHECK_EQ(is_repeated_, static_cast<Label>(label_) == LABEL_REPEATED);
   return is_repeated_;
 }
 
@@ -3030,6 +3040,15 @@ inline const FileDescriptor* FileDescriptor::public_dependency(
 
 inline const FileDescriptor* FileDescriptor::weak_dependency(int index) const {
   return dependency(weak_dependencies_[index]);
+}
+
+// BitField handling of SymbolVisibility in message/enum
+inline SymbolVisibility Descriptor::visibility_keyword() const {
+  return static_cast<SymbolVisibility>(visibility_);
+}
+
+inline SymbolVisibility EnumDescriptor::visibility_keyword() const {
+  return static_cast<SymbolVisibility>(visibility_);
 }
 
 namespace internal {

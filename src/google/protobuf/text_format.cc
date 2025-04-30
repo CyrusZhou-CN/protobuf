@@ -2164,7 +2164,8 @@ void TextFormat::Printer::SetUseUtf8StringEscaping(bool as_utf8) {
 
 void TextFormat::Printer::SetDefaultFieldValuePrinter(
     const FieldValuePrinter* printer) {
-  default_field_value_printer_.reset(new FieldValuePrinterWrapper(printer));
+  default_field_value_printer_ =
+      std::make_unique<FieldValuePrinterWrapper>(printer);
 }
 
 void TextFormat::Printer::SetDefaultFieldValuePrinter(
@@ -3037,7 +3038,7 @@ bool TextFormat::Printer::TryRedactFieldValue(
     const Message& message, const FieldDescriptor* field,
     BaseTextGenerator* generator, bool insert_value_separator) const {
   TextFormat::RedactionState redaction_state =
-      field->file()->pool()->MemoizeProjection(
+      DescriptorPool::MemoizeProjection(
           field, [](const FieldDescriptor* field) {
             return TextFormat::GetRedactionState(field);
           });

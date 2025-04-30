@@ -42,9 +42,13 @@
 #ifndef UPB_WIRE_INTERNAL_DECODE_FAST_H_
 #define UPB_WIRE_INTERNAL_DECODE_FAST_H_
 
+#include <stddef.h>
+#include <stdint.h>
+
 #include "upb/message/message.h"
 
 // Must be last.
+#include "upb/mini_table/message.h"
 #include "upb/port/def.inc"
 
 #ifdef __cplusplus

@@ -190,19 +190,24 @@ http_archive(
 )
 
 http_archive(
-    name = "com_github_google_benchmark",
+    name = "google_benchmark",
     sha256 = "62e2f2e6d8a744d67e4bbc212fcfd06647080de4253c97ad5c6749e09faf2cb0",
     strip_prefix = "benchmark-0baacde3618ca617da95375e0af13ce1baadea47",
     urls = ["https://github.com/google/benchmark/archive/0baacde3618ca617da95375e0af13ce1baadea47.zip"],
 )
 
 http_archive(
-    name = "com_google_googleapis",
-    build_file = "//benchmarks:BUILD.googleapis",
-    patch_cmds = ["find google -type f -name BUILD.bazel -delete"],
-    sha256 = "f5d1f45a03e608632084811a5870b4ebdf0b95edbe899e6448d337427d8f38dc",
-    strip_prefix = "googleapis-c414002bae922fc4577637a542e11fb9700af10f",
-    urls = ["https://github.com/googleapis/googleapis/archive/c414002bae922fc4577637a542e11fb9700af10f.zip"],
+    name = "googleapis",
+    integrity = "sha256-PopiL25y4WYMFq6EavbasLPraW+98BcuV7nN1nUjeOc=",
+    strip_prefix = "googleapis-fe8ba054ad4f7eca946c2d14a63c3f07c0b586a0",
+    urls = ["https://github.com/googleapis/googleapis/archive/fe8ba054ad4f7eca946c2d14a63c3f07c0b586a0.zip"],
+)
+
+load("@googleapis//:repository_rules.bzl", "switched_rules_by_language")
+
+switched_rules_by_language(
+    name = "com_google_googleapis_imports",
+    cc = True,
 )
 
 load("@system_python//:pip.bzl", "pip_parse")
@@ -227,11 +232,9 @@ http_archive(
 
 http_archive(
     name = "rules_fuzzing",
-    patch_args = ["-p1"],
-    patches = ["//third_party:rules_fuzzing.patch"],
-    sha256 = "77206c54b71f4dd5335123a6ff2a8ea688eca5378d34b4838114dff71652cf26",
-    strip_prefix = "rules_fuzzing-0.5.1",
-    urls = ["https://github.com/bazelbuild/rules_fuzzing/releases/download/v0.5.1/rules_fuzzing-0.5.1.zip"],
+    integrity = "sha256-CCdEIsQ4NBbfX5gpQ+QNWBQfdJwJAIu3gEQO7OaxE+Q=",
+    strip_prefix = "rules_fuzzing-0.5.3",
+    urls = ["https://github.com/bazelbuild/rules_fuzzing/archive/v0.5.3.tar.gz"],
 )
 
 load("@rules_fuzzing//fuzzing:repositories.bzl", "rules_fuzzing_dependencies")
@@ -248,8 +251,8 @@ fuzzing_py_deps_install_deps()
 
 http_archive(
     name = "rules_rust",
-    integrity = "sha256-r09Wyq5QqZpov845sUG1Cd1oVIyCBLmKt6HK/JTVuwI=",
-    urls = ["https://github.com/bazelbuild/rules_rust/releases/download/0.54.1/rules_rust-v0.54.1.tar.gz"],
+    integrity = "sha256-8TBqrAsli3kN8BrZq8arsN8LZUFsdLTvJ/Sqsph4CmQ=",
+    urls = ["https://github.com/bazelbuild/rules_rust/releases/download/0.56.0/rules_rust-0.56.0.tar.gz"],
 )
 
 load("@rules_rust//rust:repositories.bzl", "rules_rust_dependencies", "rust_register_toolchains")
@@ -288,14 +291,19 @@ crate_repositories()
 
 # For testing runtime against old gencode from a previous major version.
 http_archive(
-    name = "com_google_protobuf_v25.0",
-    integrity = "sha256-aYl601ZjGPYtu0Nc2Nsl58qiPgSXqT9e20mQM5FcxXk=",
-    strip_prefix = "protobuf-d8756a62c8ae40686b75fee9ad9c876ac892d043",
-    url = "https://github.com/protocolbuffers/protobuf/archive/d8756a62c8ae40686b75fee9ad9c876ac892d043.tar.gz",
+    name = "com_google_protobuf_v25",
+    integrity = "sha256-e+7ZxRHWMs/3wirACU3Xcg5VAVMDnV2n4Fm8zrSIR0o=",
+    patch_args = ["-p1"],
+    patches = [
+        # There are other patches, but they are only needed for bzlmod.
+        "@com_google_protobuf//:patches/protobuf_v25/0005-Make-rules_ruby-a-dev-only-dependency.patch",
+    ],
+    strip_prefix = "protobuf-25.0",
+    url = "https://github.com/protocolbuffers/protobuf/releases/download/v25.0/protobuf-25.0.tar.gz",
 )
 
-# Needed as a dependency of @com_google_protobuf_v25.0
-load("@com_google_protobuf_v25.0//:protobuf_deps.bzl", protobuf_v25_deps = "protobuf_deps")
+# Needed as a dependency of @com_google_protobuf_v25
+load("@com_google_protobuf_v25//:protobuf_deps.bzl", protobuf_v25_deps = "protobuf_deps")
 
 protobuf_v25_deps()
 
@@ -307,12 +315,11 @@ http_archive(
 )
 
 # For checking breaking changes to well-known types from the previous release version.
-load("//:protobuf_version.bzl", "PROTOBUF_PREVIOUS_RELEASE")
-
 http_archive(
     name = "com_google_protobuf_previous_release",
-    strip_prefix = "protobuf-" + PROTOBUF_PREVIOUS_RELEASE,
-    url = "https://github.com/protocolbuffers/protobuf/releases/download/v{0}/protobuf-{0}.tar.gz".format(PROTOBUF_PREVIOUS_RELEASE),
+    integrity = "sha256-EKDVjzmhqQnpXgDougtbHcZNApl/dBFRlTorNln254w=",
+    strip_prefix = "protobuf-29.0",
+    urls = ["https://github.com/protocolbuffers/protobuf/releases/download/v29.0/protobuf-29.0.tar.gz"],
 )
 
 http_archive(

@@ -141,6 +141,13 @@ struct ReflectionSchema {
     return Inlined(offsets_[field->index()], field->type());
   }
 
+  bool IsFieldMicroString(const FieldDescriptor* field) const {
+    return internal::EnableExperimentalMicroString() && !field->is_repeated() &&
+           !field->is_extension() &&
+           field->cpp_type() == FieldDescriptor::CPPTYPE_STRING &&
+           field->cpp_string_type() == FieldDescriptor::CppStringType::kView;
+  }
+
   uint32_t GetOneofCaseOffset(const OneofDescriptor* oneof_descriptor) const {
     return static_cast<uint32_t>(oneof_case_offset_) +
            static_cast<uint32_t>(
@@ -260,7 +267,7 @@ struct ReflectionSchema {
     if (type == FieldDescriptor::TYPE_MESSAGE ||
         type == FieldDescriptor::TYPE_STRING ||
         type == FieldDescriptor::TYPE_BYTES) {
-      return v & (~kSplitFieldOffsetMask) & (~kInlinedMask) & (~kLazyMask);
+      return v & ~kSplitFieldOffsetMask & ~kInlinedMask & ~kLazyMask;
     }
     return v & (~kSplitFieldOffsetMask);
   }

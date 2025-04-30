@@ -47,6 +47,39 @@ void MicroString::DestroySlow() {
   }
 }
 
+void MicroString::ClearSlow() {
+  if (is_micro_rep()) {
+    micro_rep()->ChangeSize(0);
+    return;
+  }
+
+  switch (large_rep_kind()) {
+    case kOwned:
+      large_rep()->ChangeSize(0);
+      return;
+    case kString: {
+      auto* rep = string_rep();
+      rep->str.clear();
+      rep->ResetBase();
+      return;
+    }
+    case kAlias: {
+      // We have a large rep we can't really use much.
+      // Transform it into a micro rep to use the space for something.
+      MicroRep* rep = reinterpret_cast<MicroRep*>(large_rep());
+      rep->capacity = sizeof(LargeRep) - sizeof(MicroRep);
+      rep->SetInitialSize(0);
+      rep_ = reinterpret_cast<void*>(reinterpret_cast<uintptr_t>(rep) +
+                                     kIsMicroRepTag);
+      return;
+    }
+    case kUnowned:
+      // We don't own any memory, so just reset to default.
+      InitDefault();
+      break;
+  }
+}
+
 void MicroString::SetFromOtherSlow(const MicroString& other, Arena* arena,
                                    size_t inline_capacity) {
   // Unowned property gets propagated, even if we have a rep already.
@@ -58,9 +91,10 @@ void MicroString::SetFromOtherSlow(const MicroString& other, Arena* arena,
   SetImpl(other.Get(), arena, inline_capacity);
 }
 
-MicroString::MicroRep* MicroString::AllocateMicroRep(size_t capacity,
+MicroString::MicroRep* MicroString::AllocateMicroRep(size_t size,
                                                      Arena* arena) {
   MicroRep* h;
+  size_t capacity = size;
   if (arena == nullptr) {
     const internal::SizedPtr alloc = internal::AllocateAtLeast(
         ArenaAlignDefault::Ceil(MicroRepSize(capacity)));
@@ -75,6 +109,7 @@ MicroString::MicroRep* MicroString::AllocateMicroRep(size_t capacity,
     h = reinterpret_cast<MicroRep*>(alloc);
   }
   h->capacity = capacity;
+  h->SetInitialSize(size);
 
   rep_ =
       reinterpret_cast<void*>(reinterpret_cast<uintptr_t>(h) + kIsMicroRepTag);
@@ -83,8 +118,9 @@ MicroString::MicroRep* MicroString::AllocateMicroRep(size_t capacity,
   return h;
 }
 
-MicroString::LargeRep* MicroString::AllocateOwnedRep(size_t capacity,
+MicroString::LargeRep* MicroString::AllocateOwnedRep(size_t size,
                                                      Arena* arena) {
+  size_t capacity = size;
   LargeRep* h;
   ABSL_DCHECK_GE(capacity, kOwned);
   if (arena == nullptr) {
@@ -103,6 +139,7 @@ MicroString::LargeRep* MicroString::AllocateOwnedRep(size_t capacity,
       reinterpret_cast<void*>(reinterpret_cast<uintptr_t>(h) | kIsLargeRepTag);
   h->capacity = capacity;
   h->payload = h->owned_head();
+  h->SetInitialSize(size);
 
   ABSL_DCHECK_EQ(+large_rep_kind(), +kOwned);
 
@@ -124,11 +161,15 @@ void MicroString::SetImpl(absl::string_view data, Arena* arena,
   if (is_micro_rep()) {
     auto* h = micro_rep();
     if (data.empty()) {
-      h->size = 0;
+      h->ChangeSize(0);
       return;
     } else if (h->capacity >= data.size()) {
-      h->size = data.size();
+      // We unpoison the buffer first, memmove, then repoison to the new size.
+      // We can't poison to the new size first because the input data might be
+      // aliasing the previously allowed part of `this`.
+      h->Unpoison();
       memmove(h->data(), data.data(), data.size());
+      h->ChangeSize(data.size());
       return;
     }
     if (arena == nullptr) {
@@ -139,11 +180,12 @@ void MicroString::SetImpl(absl::string_view data, Arena* arena,
       case kOwned: {
         auto* h = large_rep();
         if (data.empty()) {
-          h->size = 0;
+          h->ChangeSize(0);
           return;
         } else if (h->capacity >= data.size()) {
-          h->size = data.size();
+          h->Unpoison();
           memmove(h->payload, data.data(), data.size());
+          h->ChangeSize(data.size());
           return;
         }
         break;
@@ -168,7 +210,7 @@ void MicroString::SetImpl(absl::string_view data, Arena* arena,
   }
 
   // If we fit in the inline space, use it.
-  if (kHasInlineRep && data.size() <= inline_capacity) {
+  if (data.size() <= inline_capacity) {
     set_inline_size(data.size());
     if (!data.empty()) {
       memmove(inline_head(), data.data(), data.size());
@@ -176,24 +218,15 @@ void MicroString::SetImpl(absl::string_view data, Arena* arena,
     return;
   }
 
-  // Special case when no inline space and value is empty: rep is null
-  if (!kHasInlineRep && data.empty()) {
-    rep_ = nullptr;
-    return;
-  }
-
   // Try MicroString rep first.
   if (data.size() <= kMaxMicroRepCapacity) {
     MicroRep* h = AllocateMicroRep(data.size(), arena);
-    h->size = data.size();
     memcpy(h->data(), data.data(), data.size());
-
     return;
   }
 
   // Input is too big for MicroString, use the large large_rep representation.
   LargeRep* h = AllocateOwnedRep(data.size(), arena);
-  h->size = data.size();
   memcpy(h->payload, data.data(), data.size());
 }
 
@@ -202,8 +235,7 @@ void MicroString::SetAlias(absl::string_view data, Arena* arena,
   // If we already have an alias, reuse the block.
   if (is_large_rep() && large_rep_kind() == kAlias) {
     auto* h = large_rep();
-    h->payload = const_cast<char*>(data.data());
-    h->size = data.size();
+    h->SetExternalBuffer(data);
     return;
   }
   // If we can fit in the inline rep, avoid allocating memory.
@@ -224,8 +256,7 @@ void MicroString::SetAlias(absl::string_view data, Arena* arena,
   } else {
     h = large_rep();
   }
-  h->payload = const_cast<char*>(data.data());
-  h->size = data.size();
+  h->SetExternalBuffer(data);
   ABSL_DCHECK_EQ(+large_rep_kind(), +kAlias);
 }
 
@@ -248,11 +279,24 @@ void MicroString::SetString(std::string&& data, Arena* arena,
   h->ResetBase();
 }
 
-void MicroString::SetUnowned(const UnownedPayload& unowned, Arena* arena) {
+void MicroString::SetUnowned(const UnownedPayload& unowned_input,
+                             Arena* arena) {
   if (arena == nullptr) Destroy();
-  rep_ = reinterpret_cast<void*>(reinterpret_cast<uintptr_t>(&unowned) |
+  rep_ = reinterpret_cast<void*>(reinterpret_cast<uintptr_t>(&unowned_input) |
                                  kIsLargeRepTag);
   ABSL_DCHECK_EQ(+large_rep_kind(), +kUnowned);
+}
+
+void MicroString::ClearToDefault(const UnownedPayload& unowned_input,
+                                 Arena* arena) {
+  auto input = unowned_input.get();
+  if (arena != nullptr && Capacity() >= input.size()) {
+    // If we are in an arena and the input fits in the existing capacity, use
+    // that instead.
+    Set(input, arena);
+  } else {
+    SetUnowned(unowned_input, arena);
+  }
 }
 
 size_t MicroString::Capacity() const {

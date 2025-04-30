@@ -8,17 +8,42 @@
 #ifndef GOOGLE_PROTOBUF_HPB_BACKEND_UPB_UPB_H__
 #define GOOGLE_PROTOBUF_HPB_BACKEND_UPB_UPB_H__
 
+#include "absl/status/statusor.h"
+#include "absl/strings/string_view.h"
+#include "google/protobuf/hpb/arena.h"
 #include "google/protobuf/hpb/backend/upb/interop.h"
+#include "google/protobuf/hpb/internal/internal.h"
+#include "google/protobuf/hpb/internal/message_lock.h"
 #include "google/protobuf/hpb/internal/template_help.h"
 #include "google/protobuf/hpb/ptr.h"
 
 namespace hpb::internal::backend::upb {
 
 template <typename T>
-void ClearMessage(hpb::internal::PtrOrRawMutable<T> message) {
+typename T::Proxy CreateMessage(Arena& arena) {
+  return PrivateAccess::CreateMessage<T>(arena.ptr());
+}
+
+template <typename T>
+void ClearMessage(PtrOrRawMutable<T> message) {
   auto ptr = Ptr(message);
-  auto minitable = hpb::interop::upb::GetMiniTable(ptr);
-  upb_Message_Clear(hpb::interop::upb::GetMessage(ptr), minitable);
+  auto minitable = interop::upb::GetMiniTable(ptr);
+  upb_Message_Clear(interop::upb::GetMessage(ptr), minitable);
+}
+
+template <typename T>
+void DeepCopy(Ptr<const T> source_message, Ptr<T> target_message) {
+  static_assert(!std::is_const_v<T>);
+  internal::DeepCopy(interop::upb::GetMessage(target_message),
+                     interop::upb::GetMessage(source_message), T::minitable(),
+                     interop::upb::GetArena(target_message));
+}
+
+template <typename T>
+absl::StatusOr<absl::string_view> Serialize(PtrOrRaw<T> message, Arena& arena) {
+  return hpb::internal::Serialize(interop::upb::GetMessage(message),
+                                  interop::upb::GetMiniTable(message),
+                                  arena.ptr(), 0);
 }
 
 }  // namespace hpb::internal::backend::upb

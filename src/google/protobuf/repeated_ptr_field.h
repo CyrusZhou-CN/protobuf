@@ -27,7 +27,6 @@
 #include <cstdlib>
 #include <iterator>
 #include <limits>
-#include <new>
 #include <string>
 #include <type_traits>
 #include <utility>
@@ -38,6 +37,7 @@
 #include "absl/log/absl_check.h"
 #include "absl/meta/type_traits.h"
 #include "google/protobuf/arena.h"
+#include "google/protobuf/arena_align.h"
 #include "google/protobuf/internal_visibility.h"
 #include "google/protobuf/message_lite.h"
 #include "google/protobuf/port.h"
@@ -243,8 +243,12 @@ class PROTOBUF_EXPORT RepeatedPtrFieldBase {
 
     using H = CommonHandler<TypeHandler>;
     int n = allocated_size();
+    ABSL_DCHECK_LE(n, Capacity());
     void** elems = elements();
     for (int i = 0; i < n; i++) {
+      if (i + 5 < n) {
+        absl::PrefetchToLocalCacheNta(elems[i + 5]);
+      }
       Delete<H>(elems[i], nullptr);
     }
     if (!using_sso()) {
@@ -801,7 +805,7 @@ inline void RepeatedPtrFieldBase::MergeFrom<Message>(
 
 // Appends all `std::string` values from `from` to this instance.
 template <>
-void RepeatedPtrFieldBase::MergeFrom<std::string>(
+PROTOBUF_EXPORT void RepeatedPtrFieldBase::MergeFrom<std::string>(
     const RepeatedPtrFieldBase& from);
 
 
