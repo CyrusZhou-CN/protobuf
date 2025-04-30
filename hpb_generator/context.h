@@ -29,6 +29,8 @@ enum class Backend { UPB, CPP };
 
 struct Options {
   Backend backend = Backend::UPB;
+  bool fasttable_enabled = false;
+  bool strip_feature_includes = false;
 };
 
 /**
