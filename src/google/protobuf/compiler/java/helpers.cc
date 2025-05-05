@@ -16,6 +16,7 @@
 #include <limits>
 #include <vector>
 
+#include "net/proto/proto1_features.pb.h"
 #include "absl/container/flat_hash_set.h"
 #include "absl/log/absl_check.h"
 #include "absl/log/absl_log.h"
@@ -945,9 +946,9 @@ inline bool NestInFileClass(const Descriptor& descriptor) {
 
 // Returns whether the type should be nested in the file class for the given
 // descriptor, depending on different Protobuf Java API versions.
-// TODO: b/372482046 - Implement `nest_in_file_class` feature for mutable API.
 template <typename Descriptor>
-bool NestInFileClass(const Descriptor& descriptor, bool immutable) {
+bool NestInFileClass(const Descriptor& descriptor, bool immutable,
+                     bool proto1_codegen) {
   (void)immutable;
   return NestInFileClass(descriptor);
 }
@@ -977,18 +978,21 @@ absl::Status ValidateNestInFileClassFeature(const EnumDescriptor& descriptor) {
   return ValidateNestInFileClassFeatureHelper(descriptor);
 }
 
-bool NestedInFileClass(const Descriptor& descriptor, bool immutable) {
+bool NestedInFileClass(const Descriptor& descriptor, bool immutable,
+                       bool proto1_codegen) {
   ABSL_CHECK_OK(ValidateNestInFileClassFeature(descriptor));
-  return NestInFileClass(descriptor, immutable);
+  return NestInFileClass(descriptor, immutable, proto1_codegen);
 }
 
-bool NestedInFileClass(const EnumDescriptor& descriptor, bool immutable) {
+bool NestedInFileClass(const EnumDescriptor& descriptor, bool immutable,
+                       bool proto1_codegen) {
   ABSL_CHECK_OK(ValidateNestInFileClassFeature(descriptor));
-  return NestInFileClass(descriptor, immutable);
+  return NestInFileClass(descriptor, immutable, proto1_codegen);
 }
 
-bool NestedInFileClass(const ServiceDescriptor& descriptor, bool immutable) {
-  return NestInFileClass(descriptor, immutable);
+bool NestedInFileClass(const ServiceDescriptor& descriptor, bool immutable,
+                       bool proto1_codegen) {
+  return NestInFileClass(descriptor, immutable, proto1_codegen);
 }
 }  // namespace java
 }  // namespace compiler
