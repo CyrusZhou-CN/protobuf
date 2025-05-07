@@ -37,6 +37,33 @@
 #define UPB_GNUC_MIN(x, y) 0
 #endif
 
+// Macros for checking for compiler attributes, defined here to avoid the
+// problem described in
+// https://gcc.gnu.org/onlinedocs/cpp/_005f_005fhas_005fattribute.html.
+#ifdef __has_attribute
+#define UPB_HAS_ATTRIBUTE(x) __has_attribute(x)
+#else
+#define UPB_HAS_ATTRIBUTE(x) 0
+#endif
+
+#ifdef __has_builtin
+#define UPB_HAS_BUILTIN(x) __has_builtin(x)
+#else
+#define UPB_HAS_BUILTIN(x) 0
+#endif
+
+#ifdef __has_extension
+#define UPB_HAS_EXTENSION(x) __has_extension(x)
+#else
+#define UPB_HAS_EXTENSION(x) 0
+#endif
+
+#ifdef __has_feature
+#define UPB_HAS_FEATURE(x) __has_feature(x)
+#else
+#define UPB_HAS_FEATURE(x) 0
+#endif
+
 #include <assert.h>
 #include <setjmp.h>
 #include <stdbool.h>
@@ -143,13 +170,9 @@ Error, UINTPTR_MAX is undefined
 #define UPB_UNLIKELY(x) (x)
 #endif
 
-#ifdef __has_builtin
-#if __has_builtin(__builtin_expect_with_probability)
+#if UPB_HAS_BUILTIN(__builtin_expect_with_probability)
 #define UPB_UNPREDICTABLE(x) \
   __builtin_expect_with_probability((bool)(x), 1, 0.5)
-#else
-#define UPB_UNPREDICTABLE(x) (x)
-#endif
 #else
 #define UPB_UNPREDICTABLE(x) (x)
 #endif
@@ -176,7 +199,7 @@ Error, UINTPTR_MAX is undefined
 #define UPB_MAX(x, y) ((x) > (y) ? (x) : (y))
 #define UPB_MIN(x, y) ((x) < (y) ? (x) : (y))
 
-#define UPB_UNUSED(var) (void)var
+#define UPB_UNUSED(var) (void)(var)
 
 // UPB_ASSUME(): in release mode, we tell the compiler to assume this is true.
 #ifdef NDEBUG
@@ -246,14 +269,10 @@ Error, UINTPTR_MAX is undefined
 #define UPB_LONGJMP(buf, val) longjmp(buf, val)
 #endif
 
-#if ((__STDC_VERSION__ >= 201112L) && !defined(__STDC_NO_ATOMICS__))
-#define UPB_USE_C11_ATOMICS
-#elif defined(__has_extension)
-#if __has_extension(c_atomic)
-#define UPB_USE_C11_ATOMICS
-#endif
-#elif defined(__GNUC__)
-// GCC supported atomics as an extension before it supported __has_extension
+#if ((__STDC_VERSION__ >= 201112L) && !defined(__STDC_NO_ATOMICS__)) || \
+    UPB_HAS_EXTENSION(c_atomic) ||                                      \
+    defined(__GNUC__)  // GCC supported atomics as an extension before it
+                       // supported __has_extension
 #define UPB_USE_C11_ATOMICS
 #elif defined(_MSC_VER)
 #define UPB_USE_MSC_ATOMICS
@@ -280,19 +299,11 @@ Error, UINTPTR_MAX is undefined
 
 /* Configure whether fasttable is switched on or not. *************************/
 
-#ifdef __has_attribute
-#define UPB_HAS_ATTRIBUTE(x) __has_attribute(x)
-#else
-#define UPB_HAS_ATTRIBUTE(x) 0
-#endif
-
 #if UPB_HAS_ATTRIBUTE(musttail)
 #define UPB_MUSTTAIL __attribute__((musttail))
 #else
 #define UPB_MUSTTAIL
 #endif
-
-#undef UPB_HAS_ATTRIBUTE
 
 /* This check is not fully robust: it does not require that we have "musttail"
  * support available. We need tail calls to avoid consuming arbitrary amounts
@@ -349,27 +360,7 @@ Error, UINTPTR_MAX is undefined
  * expected behavior.
  */
 
-/* Due to preprocessor limitations, the conditional logic for setting
- * UPB_CLANG_ASAN below cannot be consolidated into a portable one-liner.
- * See https://gcc.gnu.org/onlinedocs/cpp/_005f_005fhas_005fattribute.html.
- */
-#if defined(__has_feature)
-#if __has_feature(address_sanitizer)
-#define UPB_CLANG_ASAN 1
-#else
-#define UPB_CLANG_ASAN 0
-#endif
-#if __has_feature(thread_sanitizer)
-#define UPB_CLANG_TSAN 1
-#else
-#define UPB_CLANG_TSAN 0
-#endif
-#else
-#define UPB_CLANG_ASAN 0
-#define UPB_CLANG_TSAN 0
-#endif
-
-#if defined(__SANITIZE_ADDRESS__) || UPB_CLANG_ASAN
+#if UPB_HAS_FEATURE(address_sanitizer) || defined(__SANITIZE_ADDRESS__)
 #define UPB_ASAN 1
 #define UPB_ASAN_GUARD_SIZE 32
 #ifdef __cplusplus
@@ -387,11 +378,13 @@ Error, UINTPTR_MAX is undefined
 #else
 #define UPB_ASAN 0
 #define UPB_ASAN_GUARD_SIZE 0
-#define UPB_POISON_MEMORY_REGION(addr, size) ((void)(addr), (void)(size))
-#define UPB_UNPOISON_MEMORY_REGION(addr, size) ((void)(addr), (void)(size))
+#define UPB_POISON_MEMORY_REGION(addr, size) \
+  (UPB_UNUSED(addr), UPB_UNUSED(size))
+#define UPB_UNPOISON_MEMORY_REGION(addr, size) \
+  (UPB_UNUSED(addr), UPB_UNUSED(size))
 #endif
 
-#if defined(__SANITIZE_THREAD__) || UPB_CLANG_TSAN
+#if UPB_HAS_FEATURE(thread_sanitizer) || defined(__SANITIZE_THREAD__)
 #define UPB_TSAN_PUBLISHED_MEMBER uintptr_t upb_tsan_safely_published;
 #define UPB_TSAN_INIT_PUBLISHED(ptr) (ptr)->upb_tsan_safely_published = 0x5AFE
 #define UPB_TSAN_CHECK_PUBLISHED(ptr) \
@@ -595,6 +588,7 @@ void upb_Status_VAppendErrorFormat(upb_Status* status, const char* fmt,
 #ifndef UPB_WIRE_EPS_COPY_INPUT_STREAM_H_
 #define UPB_WIRE_EPS_COPY_INPUT_STREAM_H_
 
+#include <stdint.h>
 #include <string.h>
 
 
@@ -621,6 +615,8 @@ void upb_Status_VAppendErrorFormat(upb_Status* status, const char* fmt,
 #ifndef UPB_MEM_ALLOC_H_
 #define UPB_MEM_ALLOC_H_
 
+#include <stddef.h>
+
 // Must be last.
 
 #ifdef __cplusplus
@@ -632,9 +628,12 @@ typedef struct upb_alloc upb_alloc;
 /* A combined `malloc()`/`free()` function.
  * If `size` is 0 then the function acts like `free()`, otherwise it acts like
  * `realloc()`.  Only `oldsize` bytes from a previous allocation are
- * preserved. */
+ * preserved. If `actual_size` is not null and the allocator supports it, the
+ * actual size of the resulting allocation is stored in `actual_size`. If
+ * `actual_size` is not null, you must zero out the memory pointed to by
+ * `actual_size` before calling. */
 typedef void* upb_alloc_func(upb_alloc* alloc, void* ptr, size_t oldsize,
-                             size_t size);
+                             size_t size, size_t* actual_size);
 
 /* A upb_alloc is a possibly-stateful allocator object.
  *
@@ -648,23 +647,37 @@ struct upb_alloc {
 
 UPB_INLINE void* upb_malloc(upb_alloc* alloc, size_t size) {
   UPB_ASSERT(alloc);
-  return alloc->func(alloc, NULL, 0, size);
+  return alloc->func(alloc, NULL, 0, size, NULL);
+}
+
+typedef struct {
+  void* p;
+  size_t n;
+} upb_SizedPtr;
+
+UPB_INLINE upb_SizedPtr upb_SizeReturningMalloc(upb_alloc* alloc, size_t size) {
+  UPB_ASSERT(alloc);
+  upb_SizedPtr result;
+  result.n = 0;
+  result.p = alloc->func(alloc, NULL, 0, size, &result.n);
+  result.n = result.p != NULL ? UPB_MAX(result.n, size) : 0;
+  return result;
 }
 
 UPB_INLINE void* upb_realloc(upb_alloc* alloc, void* ptr, size_t oldsize,
                              size_t size) {
   UPB_ASSERT(alloc);
-  return alloc->func(alloc, ptr, oldsize, size);
+  return alloc->func(alloc, ptr, oldsize, size, NULL);
 }
 
 UPB_INLINE void upb_free(upb_alloc* alloc, void* ptr) {
   UPB_ASSERT(alloc);
-  alloc->func(alloc, ptr, 0, 0);
+  alloc->func(alloc, ptr, 0, 0, NULL);
 }
 
 UPB_INLINE void upb_free_sized(upb_alloc* alloc, void* ptr, size_t size) {
   UPB_ASSERT(alloc);
-  alloc->func(alloc, ptr, size, 0);
+  alloc->func(alloc, ptr, size, 0, NULL);
 }
 
 // The global allocator used by upb. Uses the standard malloc()/free().
@@ -961,8 +974,9 @@ typedef struct {
   const char* end;        // Can read up to SlopBytes bytes beyond this.
   const char* limit_ptr;  // For bounds checks, = end + UPB_MIN(limit, 0)
   uintptr_t input_delta;  // Diff between the original input pointer and patch
-  int limit;   // Submessage limit relative to end
-  bool error;  // To distinguish between EOF and error.
+  const char* buffer_start;  // Pointer to the original input buffer
+  int limit;                 // Submessage limit relative to end
+  bool error;                // To distinguish between EOF and error.
   bool aliasing;
   char patch[kUpb_EpsCopyInputStream_SlopBytes * 2];
 } upb_EpsCopyInputStream;
@@ -986,6 +1000,7 @@ typedef const char* upb_EpsCopyInputStream_IsDoneFallbackFunc(
 UPB_INLINE void upb_EpsCopyInputStream_Init(upb_EpsCopyInputStream* e,
                                             const char** ptr, size_t size,
                                             bool enable_aliasing) {
+  e->buffer_start = *ptr;
   if (size <= kUpb_EpsCopyInputStream_SlopBytes) {
     memset(&e->patch, 0, 32);
     if (size) memcpy(&e->patch, *ptr, size);
@@ -1089,7 +1104,7 @@ UPB_INLINE size_t upb_EpsCopyInputStream_BytesAvailable(
 UPB_INLINE bool upb_EpsCopyInputStream_CheckSize(
     const upb_EpsCopyInputStream* e, const char* ptr, int size) {
   UPB_ASSERT(size >= 0);
-  return ptr - e->end + size <= e->limit;
+  return size <= e->limit - (ptr - e->end);
 }
 
 UPB_INLINE bool _upb_EpsCopyInputStream_CheckSizeAvailable(
@@ -1160,7 +1175,13 @@ UPB_INLINE bool upb_EpsCopyInputStream_AliasingAvailable(
 // be different if we are currently parsing out of the patch buffer.
 UPB_INLINE const char* upb_EpsCopyInputStream_GetInputPtr(
     upb_EpsCopyInputStream* e, const char* ptr) {
-  return (const char*)(((uintptr_t)ptr) + e->input_delta);
+  // This somewhat silly looking add-and-subtract behavior provides provenance
+  // from the original input buffer's pointer. After optimization it produces
+  // the same assembly as just casting `(uintptr_t)ptr+input_delta`
+  // https://godbolt.org/z/zosG88oPn
+  size_t position =
+      (uintptr_t)ptr + e->input_delta - (uintptr_t)e->buffer_start;
+  return e->buffer_start + position;
 }
 
 // Returns a pointer into an input buffer that corresponds to the parsing
@@ -1390,10 +1411,14 @@ UPB_INLINE bool upb_StringView_IsEqual(upb_StringView a, upb_StringView b) {
 // Please note this comparison is neither unicode nor locale aware.
 UPB_INLINE int upb_StringView_Compare(upb_StringView a, upb_StringView b) {
   int result = memcmp(a.data, b.data, UPB_MIN(a.size, b.size));
-  if (result == 0) {
-    return a.size - b.size;
+  if (result != 0) return result;
+  if (a.size < b.size) {
+    return -1;
+  } else if (a.size > b.size) {
+    return 1;
+  } else {
+    return 0;
   }
-  return result;
 }
 
 // LINT.ThenChange(
@@ -2055,7 +2080,7 @@ UPB_INLINE char UPB_PRIVATE(_upb_MiniTableField_HasbitMask)(
     const struct upb_MiniTableField* f) {
   UPB_ASSERT(UPB_PRIVATE(_upb_MiniTableField_HasHasbit)(f));
   const uint16_t index = f->presence;
-  return 1 << (index % 8);
+  return (char)(1 << (index % 8));
 }
 
 UPB_INLINE uint16_t UPB_PRIVATE(_upb_MiniTableField_HasbitOffset)(
@@ -3496,15 +3521,21 @@ UPB_NOINLINE bool UPB_PRIVATE(_upb_Message_AddUnknownSlowPath)(
 
 // Adds unknown data (serialized protobuf data) to the given message. The data
 // must represent one or more complete and well formed proto fields.
-// If alias is set, will keep a view to the provided data; otherwise a copy is
-// made.
+//
+// If `alias_base` is NULL, the bytes from `data` will be copied into the
+// destination arena. Otherwise it must be a pointer to the beginning of the
+// buffer that `data` points into, which signals that the message must alias
+// the bytes instead of copying them. The value of `alias_base` is also used
+// to mark the boundary of the buffer, so that we do not inappropriately
+// coalesce two buffers that are separate objects but happen to be contiguous
+// in memory.
 UPB_INLINE bool UPB_PRIVATE(_upb_Message_AddUnknown)(struct upb_Message* msg,
                                                      const char* data,
                                                      size_t len,
                                                      upb_Arena* arena,
-                                                     bool alias) {
+                                                     const char* alias_base) {
   UPB_ASSERT(!upb_Message_IsFrozen(msg));
-  if (alias) {
+  if (alias_base) {
     // Aliasing parse of a message with sequential unknown fields is a simple
     // pointer bump, so inline it.
     upb_Message_Internal* in = UPB_PRIVATE(_upb_Message_GetInternal)(msg);
@@ -3512,10 +3543,13 @@ UPB_INLINE bool UPB_PRIVATE(_upb_Message_AddUnknown)(struct upb_Message* msg,
       upb_TaggedAuxPtr ptr = in->aux_data[in->size - 1];
       if (upb_TaggedAuxPtr_IsUnknown(ptr)) {
         upb_StringView* existing = upb_TaggedAuxPtr_UnknownData(ptr);
-        bool was_aliased = upb_TaggedAuxPtr_IsUnknownAliased(ptr);
         // Fast path if the field we're adding is immediately after the last
-        // added unknown field.
-        if (was_aliased && existing->data + existing->size == data) {
+        // added unknown field. However, we could be merging into an existing
+        // message with an allocation that just happens to be positioned
+        // immediately after the previous merged unknown field; this is
+        // considered out-of-bounds and thus UB. Ensure it's in-bounds by
+        // comparing with the original input pointer for our buffer.
+        if (data != alias_base && existing->data + existing->size == data) {
           existing->size += len;
           return true;
         }
@@ -3523,7 +3557,7 @@ UPB_INLINE bool UPB_PRIVATE(_upb_Message_AddUnknown)(struct upb_Message* msg,
     }
   }
   return UPB_PRIVATE(_upb_Message_AddUnknownSlowPath)(msg, data, len, arena,
-                                                      alias);
+                                                      alias_base != NULL);
 }
 
 // Adds unknown data (serialized protobuf data) to the given message.
@@ -3773,6 +3807,16 @@ UPB_API void upb_Message_SetNewMessageTraceHandler(
 
 #ifndef UPB_GENERATED_CODE_SUPPORT_H_
 #define UPB_GENERATED_CODE_SUPPORT_H_
+
+// This is a bit awkward; we want to conditionally include the fast decoder,
+// but we generally don't let macros like UPB_FASTTABLE leak into user code.
+// We can't #include "decode_fast.h" inside the port/def.inc, because the
+// inc files strictly prohibit recursive inclusion, and decode_fast.h includes
+// port/def.inc. So instead we use this two-part dance to conditionally include
+// decode_fast.h.
+#if UPB_FASTTABLE
+#define UPB_INCLUDE_FAST_DECODE
+#endif
 
 // IWYU pragma: begin_exports
 
@@ -6019,150 +6063,11 @@ UPB_API const char* upb_EncodeStatus_String(upb_EncodeStatus status);
 
 
 #endif /* UPB_WIRE_ENCODE_H_ */
-
-// These are the specialized field parser functions for the fast parser.
-// Generated tables will refer to these by name.
-//
-// The function names are encoded with names like:
-//
-//   //  123 4
-//   upb_pss_1bt();   // Parse singular string, 1 byte tag.
-//
-// In position 1:
-//   - 'p' for parse, most function use this
-//   - 'c' for copy, for when we are copying strings instead of aliasing
-//
-// In position 2 (cardinality):
-//   - 's' for singular, with or without hasbit
-//   - 'o' for oneof
-//   - 'r' for non-packed repeated
-//   - 'p' for packed repeated
-//
-// In position 3 (type):
-//   - 'b1' for bool
-//   - 'v4' for 4-byte varint
-//   - 'v8' for 8-byte varint
-//   - 'z4' for zig-zag-encoded 4-byte varint
-//   - 'z8' for zig-zag-encoded 8-byte varint
-//   - 'f4' for 4-byte fixed
-//   - 'f8' for 8-byte fixed
-//   - 'm' for sub-message
-//   - 's' for string (validate UTF-8)
-//   - 'b' for bytes
-//
-// In position 4 (tag length):
-//   - '1' for one-byte tags (field numbers 1-15)
-//   - '2' for two-byte tags (field numbers 16-2048)
-
-#ifndef UPB_WIRE_INTERNAL_DECODE_FAST_H_
-#define UPB_WIRE_INTERNAL_DECODE_FAST_H_
-
-
-// Must be last.
-
-#if UPB_FASTTABLE
-
-#ifdef __cplusplus
-extern "C" {
+#ifdef UPB_INCLUDE_FAST_DECODE
 #endif
-
-struct upb_Decoder;
-
-// The fallback, generic parsing function that can handle any field type.
-// This just uses the regular (non-fast) parser to parse a single field.
-const char* _upb_FastDecoder_DecodeGeneric(struct upb_Decoder* d,
-                                           const char* ptr, upb_Message* msg,
-                                           intptr_t table, uint64_t hasbits,
-                                           uint64_t data);
-
-#define UPB_PARSE_PARAMS                                                    \
-  struct upb_Decoder *d, const char *ptr, upb_Message *msg, intptr_t table, \
-      uint64_t hasbits, uint64_t data
-
-/* primitive fields ***********************************************************/
-
-#define F(card, type, valbytes, tagbytes) \
-  const char* upb_p##card##type##valbytes##_##tagbytes##bt(UPB_PARSE_PARAMS);
-
-#define TYPES(card, tagbytes) \
-  F(card, b, 1, tagbytes)     \
-  F(card, v, 4, tagbytes)     \
-  F(card, v, 8, tagbytes)     \
-  F(card, z, 4, tagbytes)     \
-  F(card, z, 8, tagbytes)     \
-  F(card, f, 4, tagbytes)     \
-  F(card, f, 8, tagbytes)
-
-#define TAGBYTES(card) \
-  TYPES(card, 1)       \
-  TYPES(card, 2)
-
-TAGBYTES(s)
-TAGBYTES(o)
-TAGBYTES(r)
-TAGBYTES(p)
-
-#undef F
-#undef TYPES
-#undef TAGBYTES
-
-/* string fields **************************************************************/
-
-#define F(card, tagbytes, type)                                     \
-  const char* upb_p##card##type##_##tagbytes##bt(UPB_PARSE_PARAMS); \
-  const char* upb_c##card##type##_##tagbytes##bt(UPB_PARSE_PARAMS);
-
-#define UTF8(card, tagbytes) \
-  F(card, tagbytes, s)       \
-  F(card, tagbytes, b)
-
-#define TAGBYTES(card) \
-  UTF8(card, 1)        \
-  UTF8(card, 2)
-
-TAGBYTES(s)
-TAGBYTES(o)
-TAGBYTES(r)
-
-#undef F
-#undef UTF8
-#undef TAGBYTES
-
-/* sub-message fields *********************************************************/
-
-#define F(card, tagbytes, size_ceil, ceil_arg) \
-  const char* upb_p##card##m_##tagbytes##bt_max##size_ceil##b(UPB_PARSE_PARAMS);
-
-#define SIZES(card, tagbytes) \
-  F(card, tagbytes, 64, 64)   \
-  F(card, tagbytes, 128, 128) \
-  F(card, tagbytes, 192, 192) \
-  F(card, tagbytes, 256, 256) \
-  F(card, tagbytes, max, -1)
-
-#define TAGBYTES(card) \
-  SIZES(card, 1)       \
-  SIZES(card, 2)
-
-TAGBYTES(s)
-TAGBYTES(o)
-TAGBYTES(r)
-
-#undef F
-#undef SIZES
-#undef TAGBYTES
-
-#undef UPB_PARSE_PARAMS
-
-#ifdef __cplusplus
-} /* extern "C" */
-#endif
-
-#endif /* UPB_FASTTABLE */
-
-
-#endif /* UPB_WIRE_INTERNAL_DECODE_FAST_H_ */
 // IWYU pragma: end_exports
+
+#undef UPB_INCLUDE_FAST_DECODE
 
 #endif  // UPB_GENERATED_CODE_SUPPORT_H_
 
@@ -14809,6 +14714,10 @@ bool UPB_PRIVATE(_upb_Message_NextBaseField)(const upb_Message* msg,
 #ifndef UPB_WIRE_READER_H_
 #define UPB_WIRE_READER_H_
 
+#include <stddef.h>
+#include <stdint.h>
+#include <string.h>
+
 
 #ifndef UPB_WIRE_INTERNAL_READER_H_
 #define UPB_WIRE_INTERNAL_READER_H_
@@ -14998,7 +14907,9 @@ UPB_INLINE const char* _upb_WireReader_SkipValue(
     case kUpb_WireType_Delimited: {
       int size;
       ptr = upb_WireReader_ReadSize(ptr, &size);
-      if (!ptr) return NULL;
+      if (!ptr || !upb_EpsCopyInputStream_CheckSize(stream, ptr, size)) {
+        return NULL;
+      }
       ptr += size;
       return ptr;
     }
@@ -15348,7 +15259,10 @@ enum {
 #ifndef UPB_WIRE_INTERNAL_DECODER_H_
 #define UPB_WIRE_INTERNAL_DECODER_H_
 
+#include <setjmp.h>
 #include <stddef.h>
+#include <stdint.h>
+#include <string.h>
 
 #include "utf8_range.h"
 
@@ -15422,9 +15336,8 @@ UPB_INLINE const char* _upb_Decoder_BufferFlipCallback(
   return new_start;
 }
 
-#if UPB_FASTTABLE
 UPB_INLINE
-const char* _upb_FastDecoder_TagDispatch(upb_Decoder* d, const char* ptr,
+const char* _upb_FastDecoder_TagDispatch(struct upb_Decoder* d, const char* ptr,
                                          upb_Message* msg, intptr_t table,
                                          uint64_t hasbits, uint64_t tag) {
   const upb_MiniTable* table_p = decode_totablep(table);
@@ -15437,7 +15350,6 @@ const char* _upb_FastDecoder_TagDispatch(upb_Decoder* d, const char* ptr,
   UPB_MUSTTAIL return table_p->UPB_PRIVATE(fasttable)[idx].field_parser(
       d, ptr, msg, table, hasbits, data);
 }
-#endif
 
 UPB_INLINE uint32_t _upb_FastDecoder_LoadTag(const char* ptr) {
   uint16_t tag;
@@ -16474,3 +16386,7 @@ upb_MethodDef* _upb_MethodDefs_New(upb_DefBuilder* ctx, int n,
 #undef UPB_LINKARR_START
 #undef UPB_LINKARR_STOP
 #undef UPB_FUTURE_BREAKING_CHANGES
+#undef UPB_HAS_ATTRIBUTE
+#undef UPB_HAS_BUILTIN
+#undef UPB_HAS_EXTENSION
+#undef UPB_HAS_FEATURE
