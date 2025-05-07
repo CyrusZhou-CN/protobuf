@@ -37,8 +37,6 @@
 #include "upb/mini_table/internal/message.h"
 #include "upb/mini_table/internal/sub.h"
 #include "upb/mini_table/message.h"
-#include "upb/mini_table/sub.h"
-#include "upb/port/atomic.h"
 #include "upb/wire/encode.h"
 #include "upb/wire/eps_copy_input_stream.h"
 #include "upb/wire/internal/constants.h"
@@ -402,7 +400,7 @@ bool _upb_Decoder_CheckEnum(upb_Decoder* d, const char* ptr, upb_Message* msg,
   end = upb_Decoder_EncodeVarint32(v, end);
 
   if (!UPB_PRIVATE(_upb_Message_AddUnknown)(unknown_msg, buf, end - buf,
-                                            &d->arena, false)) {
+                                            &d->arena, NULL)) {
     _upb_Decoder_ErrorJmp(d, kUpb_DecodeStatus_OutOfMemory);
   }
   return false;
@@ -1296,9 +1294,9 @@ static const char* _upb_Decoder_DecodeUnknownField(upb_Decoder* d,
     // bounds checks are needed before adding the unknown field.
     _upb_Decoder_IsDone(d, &ptr);
     const char* input_ptr = upb_EpsCopyInputStream_GetInputPtr(&d->input, ptr);
-    if (!UPB_PRIVATE(_upb_Message_AddUnknown)(msg, input_start,
-                                              input_ptr - input_start,
-                                              &d->arena, d->input.aliasing)) {
+    if (!UPB_PRIVATE(_upb_Message_AddUnknown)(
+            msg, input_start, input_ptr - input_start, &d->arena,
+            d->input.aliasing ? d->input.buffer_start : NULL)) {
       _upb_Decoder_ErrorJmp(d, kUpb_DecodeStatus_OutOfMemory);
     }
   } else if (wire_type == kUpb_WireType_StartGroup) {
@@ -1376,6 +1374,7 @@ static const char* _upb_Decoder_DecodeMessage(upb_Decoder* d, const char* ptr,
              : ptr;
 }
 
+#if UPB_FASTTABLE
 const char* _upb_FastDecoder_DecodeGeneric(struct upb_Decoder* d,
                                            const char* ptr, upb_Message* msg,
                                            intptr_t table, uint64_t hasbits,
@@ -1384,6 +1383,7 @@ const char* _upb_FastDecoder_DecodeGeneric(struct upb_Decoder* d,
   *(uint32_t*)msg |= hasbits;
   return _upb_Decoder_DecodeMessage(d, ptr, msg, decode_totablep(table));
 }
+#endif
 
 static upb_DecodeStatus _upb_Decoder_DecodeTop(struct upb_Decoder* d,
                                                const char* buf,

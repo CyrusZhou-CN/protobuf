@@ -49,16 +49,12 @@ void WriteInternalForwardDeclarationsInHeader(
     const protobuf::Descriptor* message, Context& ctx);
 void WriteDefaultInstanceHeader(const protobuf::Descriptor* message,
                                 Context& ctx);
-void WriteExtensionIdentifiersImplementation(
-    const protobuf::Descriptor* message,
-    const std::vector<const protobuf::FieldDescriptor*>& file_exts,
-    Context& ctx);
 void WriteUsingEnumsInHeader(
     const protobuf::Descriptor* message,
     const std::vector<const protobuf::EnumDescriptor*>& file_enums,
     Context& ctx);
 
-// Writes message class declarations into .upb.proto.h.
+// Writes message class declarations into .hpb.h.
 //
 // For each proto Foo, FooAccess and FooProxy/FooCProxy are generated
 // that are exposed to users as Foo , Ptr<Foo> and Ptr<const Foo>.
@@ -271,13 +267,6 @@ void WriteModelPublicDeclaration(
         friend struct ::hpb::internal::PrivateAccess;
         friend Proxy;
         friend CProxy;
-        friend absl::StatusOr<$2>(::hpb::Parse<$2>(
-            absl::string_view bytes,
-            const ::hpb::ExtensionRegistry& extension_registry));
-        friend upb_Arena* hpb::interop::upb::GetArena<$0>($0* message);
-        friend upb_Arena* hpb::interop::upb::GetArena<$0>(::hpb::Ptr<$0> message);
-        friend $0(hpb::interop::upb::MoveMessage<$0>(upb_Message* msg,
-                                                     upb_Arena* arena));
       )cc",
       ClassName(descriptor),
       upb::generator::CApiMessageType(descriptor->full_name()),
@@ -480,8 +469,6 @@ void WriteMessageImplementation(
           }
         )cc",
         ClassName(descriptor));
-
-    WriteExtensionIdentifiersImplementation(descriptor, file_exts, ctx);
   }
 }
 
@@ -505,18 +492,6 @@ void WriteExtensionIdentifiersInClassHeader(
     if (ext->extension_scope() &&
         ext->extension_scope()->full_name() == message->full_name()) {
       WriteExtensionIdentifierHeader(ext, ctx);
-    }
-  }
-}
-
-void WriteExtensionIdentifiersImplementation(
-    const protobuf::Descriptor* message,
-    const std::vector<const protobuf::FieldDescriptor*>& file_exts,
-    Context& ctx) {
-  for (auto* ext : file_exts) {
-    if (ext->extension_scope() &&
-        ext->extension_scope()->full_name() == message->full_name()) {
-      WriteExtensionIdentifier(ext, ctx);
     }
   }
 }

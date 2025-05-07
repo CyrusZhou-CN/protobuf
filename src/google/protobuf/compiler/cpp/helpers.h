@@ -358,10 +358,8 @@ inline bool IsString(const FieldDescriptor* field) {
 }
 
 
-inline bool IsArenaStringPtr(const FieldDescriptor* field) {
-  return field->cpp_string_type() == FieldDescriptor::CppStringType::kString ||
-         field->cpp_string_type() == FieldDescriptor::CppStringType::kView;
-}
+bool IsArenaStringPtr(const FieldDescriptor* field, const Options& opts);
+bool IsMicroString(const FieldDescriptor* field, const Options& opts);
 
 bool IsProfileDriven(const Options& options);
 
@@ -731,6 +729,18 @@ void ListAllFields(const Descriptor* d,
                    std::vector<const FieldDescriptor*>* fields);
 void ListAllFields(const FileDescriptor* d,
                    std::vector<const FieldDescriptor*>* fields);
+
+// Returns true if the field's position in the message is chosen by the layout
+// optimizer.
+bool IsLayoutOptimized(const FieldDescriptor* field, const Options& options);
+
+// Collects all fields from the given descriptor, excluding weak fields and
+// fields in oneofs.
+//
+// Returns the number of weak fields.
+int CollectFieldsExcludingWeakAndOneof(
+    const Descriptor* d, const Options& options,
+    std::vector<const FieldDescriptor*>& fields);
 
 template <bool do_nested_types, class T>
 void ForEachField(const Descriptor* d, T&& func) {

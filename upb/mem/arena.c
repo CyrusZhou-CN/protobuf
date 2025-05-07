@@ -57,10 +57,13 @@ typedef struct upb_ArenaInternal {
   // == NULL at end of list.
   UPB_ATOMIC(struct upb_ArenaInternal*) next;
 
-  // If the low bit is set, is a pointer to the tail of the list (populated for
-  // roots, set to self for roots with no fused arenas). If the low bit is not
-  // set, is a pointer to the previous node in the list, such that
-  // a->previous_or_tail->next == a.
+  // - If the low bit is set, is a pointer to the tail of the list (populated
+  //   for roots, set to self for roots with no fused arenas). This is best
+  //   effort, and it may not always reflect the true tail, but it will always
+  //   be a valid node in the list. This is useful for finding the list tail
+  //   without having to walk the entire list.
+  // - If the low bit is not set, is a pointer to the previous node in the list,
+  //   such that a->previous_or_tail->next == a.
   UPB_ATOMIC(uintptr_t) previous_or_tail;
 
   // Linked list of blocks to free/cleanup.
@@ -365,11 +368,14 @@ void* UPB_PRIVATE(_upb_Arena_SlowMalloc)(upb_Arena* a, size_t size) {
   // We may need to exceed the max block size if the user requested a large
   // allocation.
   size_t block_size = UPB_MAX(kUpb_MemblockReserve + size, target_size);
+  upb_alloc* block_alloc = _upb_ArenaInternal_BlockAlloc(ai);
+  upb_SizedPtr alloc_result = upb_SizeReturningMalloc(block_alloc, block_size);
 
-  upb_MemBlock* block =
-      upb_malloc(_upb_ArenaInternal_BlockAlloc(ai), block_size);
+  if (!alloc_result.p) return NULL;
 
-  if (!block) return NULL;
+  upb_MemBlock* block = alloc_result.p;
+  size_t actual_block_size = alloc_result.n;
+
   // Atomic add not required here, as threads won't race allocating blocks, plus
   // atomic fetch-add is slower than load/add/store on arm devices compiled
   // targetting pre-v8.1. Relaxed order is safe as nothing depends on order of
@@ -377,11 +383,12 @@ void* UPB_PRIVATE(_upb_Arena_SlowMalloc)(upb_Arena* a, size_t size) {
 
   uintptr_t old_space_allocated =
       upb_Atomic_Load(&ai->space_allocated, memory_order_relaxed);
-  upb_Atomic_Store(&ai->space_allocated, old_space_allocated + block_size,
+  upb_Atomic_Store(&ai->space_allocated,
+                   old_space_allocated + actual_block_size,
                    memory_order_relaxed);
   if (UPB_UNLIKELY(insert_after_head)) {
     upb_ArenaInternal* ai = upb_Arena_Internal(a);
-    block->size_or_hint = block_size;
+    block->size_or_hint = actual_block_size;
     upb_MemBlock* head = ai->blocks;
     block->next = head->next;
     head->next = block;
@@ -390,7 +397,7 @@ void* UPB_PRIVATE(_upb_Arena_SlowMalloc)(upb_Arena* a, size_t size) {
     UPB_POISON_MEMORY_REGION(allocated + size, UPB_ASAN_GUARD_SIZE);
     return allocated;
   } else {
-    _upb_Arena_AddBlock(a, block, kUpb_MemblockReserve, block_size);
+    _upb_Arena_AddBlock(a, block, kUpb_MemblockReserve, actual_block_size);
     UPB_ASSERT(UPB_PRIVATE(_upb_ArenaHas)(a) >= size);
     return upb_Arena_Malloc(a, size - UPB_ASAN_GUARD_SIZE);
   }
@@ -402,13 +409,17 @@ static upb_Arena* _upb_Arena_InitSlow(upb_alloc* alloc, size_t first_size) {
   upb_ArenaState* a;
 
   // We need to malloc the initial block.
-  char* mem;
+
   size_t block_size =
       first_block_overhead +
       UPB_MAX(256, UPB_ALIGN_MALLOC(first_size) + UPB_ASAN_GUARD_SIZE);
-  if (!alloc || !(mem = upb_malloc(alloc, block_size))) {
+  upb_SizedPtr alloc_result;
+  if (!alloc ||
+      !(alloc_result = upb_SizeReturningMalloc(alloc, block_size)).p) {
     return NULL;
   }
+  char* mem = alloc_result.p;
+  size_t actual_block_size = alloc_result.n;
 
   a = UPB_PTR_AT(mem, kUpb_MemblockReserve, upb_ArenaState);
 
@@ -417,12 +428,12 @@ static upb_Arena* _upb_Arena_InitSlow(upb_alloc* alloc, size_t first_size) {
   upb_Atomic_Init(&a->body.next, NULL);
   upb_Atomic_Init(&a->body.previous_or_tail,
                   _upb_Arena_TaggedFromTail(&a->body));
-  upb_Atomic_Init(&a->body.space_allocated, block_size);
+  upb_Atomic_Init(&a->body.space_allocated, actual_block_size);
   a->body.blocks = NULL;
   a->body.upb_alloc_cleanup = NULL;
   UPB_TSAN_INIT_PUBLISHED(&a->body);
 
-  _upb_Arena_AddBlock(&a->head, mem, first_block_overhead, block_size);
+  _upb_Arena_AddBlock(&a->head, mem, first_block_overhead, actual_block_size);
 
   return &a->head;
 }
@@ -533,48 +544,77 @@ retry:
   goto retry;
 }
 
-static void _upb_Arena_DoFuseArenaLists(upb_ArenaInternal* const parent,
-                                        upb_ArenaInternal* child) {
+// Logically performs the following operation, in a way that is safe against
+// racing fuses:
+//   ret = TAIL(parent)
+//   ret->next = child
+//   return ret
+//
+// The caller is therefore guaranteed that ret->next == child.
+static upb_ArenaInternal* _upb_Arena_LinkForward(
+    upb_ArenaInternal* const parent, upb_ArenaInternal* child) {
   UPB_TSAN_CHECK_PUBLISHED(parent);
   uintptr_t parent_previous_or_tail =
       upb_Atomic_Load(&parent->previous_or_tail, memory_order_acquire);
-  upb_ArenaInternal* parent_tail = parent;
-  if (_upb_Arena_IsTaggedTail(parent_previous_or_tail)) {
-    // Our tail might be stale, but it will always converge to the true tail.
-    parent_tail = _upb_Arena_TailFromTagged(parent_previous_or_tail);
-  }
 
-  // Link parent to child going forwards
-  while (true) {
-    UPB_TSAN_CHECK_PUBLISHED(parent_tail);
-    upb_ArenaInternal* parent_tail_next =
-        upb_Atomic_Load(&parent_tail->next, memory_order_acquire);
+  // Optimization: use parent->previous_or_tail to skip to TAIL(parent) in O(1)
+  // time when possible. This is the common case because we just fused into
+  // parent, suggesting that it should be a root with a cached tail.
+  //
+  // However, if there was a racing fuse, parent may no longer be a root, in
+  // which case we need to walk the entire list to find the tail. The tail
+  // pointer is also not guaranteed to be the true tail, so even when the
+  // optimization is taken, we still need to walk list nodes to find the true
+  // tail.
+  upb_ArenaInternal* parent_tail =
+      _upb_Arena_IsTaggedTail(parent_previous_or_tail)
+          ? _upb_Arena_TailFromTagged(parent_previous_or_tail)
+          : parent;
+
+  UPB_TSAN_CHECK_PUBLISHED(parent_tail);
+  upb_ArenaInternal* parent_tail_next =
+      upb_Atomic_Load(&parent_tail->next, memory_order_acquire);
+
+  do {
+    // Walk the list to find the true tail (a node with next == NULL).
     while (parent_tail_next != NULL) {
       parent_tail = parent_tail_next;
       UPB_TSAN_CHECK_PUBLISHED(parent_tail);
       parent_tail_next =
           upb_Atomic_Load(&parent_tail->next, memory_order_acquire);
     }
-    if (upb_Atomic_CompareExchangeWeak(&parent_tail->next, &parent_tail_next,
-                                       child, memory_order_release,
-                                       memory_order_acquire)) {
-      break;
-    }
-    if (parent_tail_next != NULL) {
-      parent_tail = parent_tail_next;
-    }
-  }
+  } while (!upb_Atomic_CompareExchangeWeak(  // Replace a NULL next with child.
+      &parent_tail->next, &parent_tail_next, child, memory_order_release,
+      memory_order_acquire));
 
-  // Update parent's tail (may be stale).
+  return parent_tail;
+}
+
+// Updates parent->previous_or_tail = child->previous_or_tail in hopes that the
+// latter represents the true tail of the newly-combined list.
+//
+// This is a best-effort operation that may set the tail to a stale value, and
+// may fail to update the tail at all.
+void _upb_Arena_UpdateParentTail(upb_ArenaInternal* parent,
+                                 upb_ArenaInternal* child) {
+  // We are guaranteed that child->previous_or_tail is tagged, because we have
+  // just transitioned child from root -> non-root, which is an exclusive
+  // operation that can only happen once. So we are the exclusive updater of
+  // child->previous_or_tail that can transition it from tagged to untagged.
+  //
+  // However, we are not guaranteed that child->previous_or_tail is the true
+  // tail.  A racing fuse may have appended to child's list but not yet updated
+  // child->previous_or_tail.
   uintptr_t child_previous_or_tail =
       upb_Atomic_Load(&child->previous_or_tail, memory_order_acquire);
   upb_ArenaInternal* new_parent_tail =
       _upb_Arena_TailFromTagged(child_previous_or_tail);
   UPB_TSAN_CHECK_PUBLISHED(new_parent_tail);
 
-  // If another thread fused with us, don't overwrite their previous pointer
-  // with our tail. Relaxed order is fine here as we only inspect the tag bit
-  parent_previous_or_tail =
+  // If another thread fused with parent, such that it is no longer a root,
+  // don't overwrite their previous pointer with our tail. Relaxed order is fine
+  // here as we only inspect the tag bit.
+  uintptr_t parent_previous_or_tail =
       upb_Atomic_Load(&parent->previous_or_tail, memory_order_relaxed);
   if (_upb_Arena_IsTaggedTail(parent_previous_or_tail)) {
     upb_Atomic_CompareExchangeStrong(
@@ -582,11 +622,36 @@ static void _upb_Arena_DoFuseArenaLists(upb_ArenaInternal* const parent,
         _upb_Arena_TaggedFromTail(new_parent_tail), memory_order_release,
         memory_order_relaxed);
   }
+}
 
-  // Link child to parent going backwards, for SpaceAllocated
+static void _upb_Arena_LinkBackward(upb_ArenaInternal* child,
+                                    upb_ArenaInternal* old_parent_tail) {
+  // Link child to parent going backwards, for SpaceAllocated.  This transitions
+  // child->previous_or_tail from tail (tagged) to previous (untagged), after
+  // which its value is immutable.
+  //
+  // - We are guaranteed that no other threads are also attempting to perform
+  //   this transition (tail -> previous), because we just updated
+  //   old_parent_tail->next from NULL to non-NULL, an exclusive operation that
+  //   can only happen once.
+  //
+  // - _upb_Arena_UpdateParentTail() uses CAS to ensure that it
+  //    does not perform the reverse transition (previous -> tail).
+  //
+  // - We are guaranteed that old_parent_tail is the correct "previous" pointer,
+  //   even in the presence of racing fuses that are adding more nodes to the
+  //   list, because _upb_Arena_LinkForward() guarantees that:
+  //       old_parent_tail->next == child.
   upb_Atomic_Store(&child->previous_or_tail,
-                   _upb_Arena_TaggedFromPrevious(parent_tail),
+                   _upb_Arena_TaggedFromPrevious(old_parent_tail),
                    memory_order_release);
+}
+
+static void _upb_Arena_DoFuseArenaLists(upb_ArenaInternal* const parent,
+                                        upb_ArenaInternal* child) {
+  upb_ArenaInternal* old_parent_tail = _upb_Arena_LinkForward(parent, child);
+  _upb_Arena_UpdateParentTail(parent, child);
+  _upb_Arena_LinkBackward(child, old_parent_tail);
 }
 
 void upb_Arena_SetAllocCleanup(upb_Arena* a, upb_AllocCleanupFunc* func) {

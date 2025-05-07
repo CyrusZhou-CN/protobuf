@@ -1,5 +1,7 @@
 # Protobuf Rust crate packaging for release.
 
+load("@rules_shell//shell:sh_binary.bzl", "sh_binary")
+
 filegroup(
     name = "crates",
     srcs = [
@@ -16,17 +18,6 @@ filegroup(
 sh_binary(
     name = "cargo_test",
     srcs = ["cargo_test.sh"],
-    data = [
-        ":crates",
-        "//:protoc",
-    ],
-    tags = ["manual"],
-    deps = ["@bazel_tools//tools/bash/runfiles"],
-)
-
-sh_binary(
-    name = "publish_release",
-    srcs = ["publish_release.sh"],
     data = [
         ":crates",
         "//:protoc",

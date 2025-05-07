@@ -38,6 +38,33 @@
 #define UPB_GNUC_MIN(x, y) 0
 #endif
 
+// Macros for checking for compiler attributes, defined here to avoid the
+// problem described in
+// https://gcc.gnu.org/onlinedocs/cpp/_005f_005fhas_005fattribute.html.
+#ifdef __has_attribute
+#define UPB_HAS_ATTRIBUTE(x) __has_attribute(x)
+#else
+#define UPB_HAS_ATTRIBUTE(x) 0
+#endif
+
+#ifdef __has_builtin
+#define UPB_HAS_BUILTIN(x) __has_builtin(x)
+#else
+#define UPB_HAS_BUILTIN(x) 0
+#endif
+
+#ifdef __has_extension
+#define UPB_HAS_EXTENSION(x) __has_extension(x)
+#else
+#define UPB_HAS_EXTENSION(x) 0
+#endif
+
+#ifdef __has_feature
+#define UPB_HAS_FEATURE(x) __has_feature(x)
+#else
+#define UPB_HAS_FEATURE(x) 0
+#endif
+
 #include <assert.h>
 #include <setjmp.h>
 #include <stdbool.h>
@@ -144,13 +171,9 @@ Error, UINTPTR_MAX is undefined
 #define UPB_UNLIKELY(x) (x)
 #endif
 
-#ifdef __has_builtin
-#if __has_builtin(__builtin_expect_with_probability)
+#if UPB_HAS_BUILTIN(__builtin_expect_with_probability)
 #define UPB_UNPREDICTABLE(x) \
   __builtin_expect_with_probability((bool)(x), 1, 0.5)
-#else
-#define UPB_UNPREDICTABLE(x) (x)
-#endif
 #else
 #define UPB_UNPREDICTABLE(x) (x)
 #endif
@@ -177,7 +200,7 @@ Error, UINTPTR_MAX is undefined
 #define UPB_MAX(x, y) ((x) > (y) ? (x) : (y))
 #define UPB_MIN(x, y) ((x) < (y) ? (x) : (y))
 
-#define UPB_UNUSED(var) (void)var
+#define UPB_UNUSED(var) (void)(var)
 
 // UPB_ASSUME(): in release mode, we tell the compiler to assume this is true.
 #ifdef NDEBUG
@@ -247,14 +270,10 @@ Error, UINTPTR_MAX is undefined
 #define UPB_LONGJMP(buf, val) longjmp(buf, val)
 #endif
 
-#if ((__STDC_VERSION__ >= 201112L) && !defined(__STDC_NO_ATOMICS__))
-#define UPB_USE_C11_ATOMICS
-#elif defined(__has_extension)
-#if __has_extension(c_atomic)
-#define UPB_USE_C11_ATOMICS
-#endif
-#elif defined(__GNUC__)
-// GCC supported atomics as an extension before it supported __has_extension
+#if ((__STDC_VERSION__ >= 201112L) && !defined(__STDC_NO_ATOMICS__)) || \
+    UPB_HAS_EXTENSION(c_atomic) ||                                      \
+    defined(__GNUC__)  // GCC supported atomics as an extension before it
+                       // supported __has_extension
 #define UPB_USE_C11_ATOMICS
 #elif defined(_MSC_VER)
 #define UPB_USE_MSC_ATOMICS
@@ -281,19 +300,11 @@ Error, UINTPTR_MAX is undefined
 
 /* Configure whether fasttable is switched on or not. *************************/
 
-#ifdef __has_attribute
-#define UPB_HAS_ATTRIBUTE(x) __has_attribute(x)
-#else
-#define UPB_HAS_ATTRIBUTE(x) 0
-#endif
-
 #if UPB_HAS_ATTRIBUTE(musttail)
 #define UPB_MUSTTAIL __attribute__((musttail))
 #else
 #define UPB_MUSTTAIL
 #endif
-
-#undef UPB_HAS_ATTRIBUTE
 
 /* This check is not fully robust: it does not require that we have "musttail"
  * support available. We need tail calls to avoid consuming arbitrary amounts
@@ -350,27 +361,7 @@ Error, UINTPTR_MAX is undefined
  * expected behavior.
  */
 
-/* Due to preprocessor limitations, the conditional logic for setting
- * UPB_CLANG_ASAN below cannot be consolidated into a portable one-liner.
- * See https://gcc.gnu.org/onlinedocs/cpp/_005f_005fhas_005fattribute.html.
- */
-#if defined(__has_feature)
-#if __has_feature(address_sanitizer)
-#define UPB_CLANG_ASAN 1
-#else
-#define UPB_CLANG_ASAN 0
-#endif
-#if __has_feature(thread_sanitizer)
-#define UPB_CLANG_TSAN 1
-#else
-#define UPB_CLANG_TSAN 0
-#endif
-#else
-#define UPB_CLANG_ASAN 0
-#define UPB_CLANG_TSAN 0
-#endif
-
-#if defined(__SANITIZE_ADDRESS__) || UPB_CLANG_ASAN
+#if UPB_HAS_FEATURE(address_sanitizer) || defined(__SANITIZE_ADDRESS__)
 #define UPB_ASAN 1
 #define UPB_ASAN_GUARD_SIZE 32
 #ifdef __cplusplus
@@ -388,11 +379,13 @@ Error, UINTPTR_MAX is undefined
 #else
 #define UPB_ASAN 0
 #define UPB_ASAN_GUARD_SIZE 0
-#define UPB_POISON_MEMORY_REGION(addr, size) ((void)(addr), (void)(size))
-#define UPB_UNPOISON_MEMORY_REGION(addr, size) ((void)(addr), (void)(size))
+#define UPB_POISON_MEMORY_REGION(addr, size) \
+  (UPB_UNUSED(addr), UPB_UNUSED(size))
+#define UPB_UNPOISON_MEMORY_REGION(addr, size) \
+  (UPB_UNUSED(addr), UPB_UNUSED(size))
 #endif
 
-#if defined(__SANITIZE_THREAD__) || UPB_CLANG_TSAN
+#if UPB_HAS_FEATURE(thread_sanitizer) || defined(__SANITIZE_THREAD__)
 #define UPB_TSAN_PUBLISHED_MEMBER uintptr_t upb_tsan_safely_published;
 #define UPB_TSAN_INIT_PUBLISHED(ptr) (ptr)->upb_tsan_safely_published = 0x5AFE
 #define UPB_TSAN_CHECK_PUBLISHED(ptr) \
@@ -463,6 +456,12 @@ Error, UINTPTR_MAX is undefined
 
 #undef UPB_IS_GOOGLE3
 
+#ifdef __clang__
+#define UPB_NO_SANITIZE_ADDRESS __attribute__((no_sanitize("address")))
+#else
+#define UPB_NO_SANITIZE_ADDRESS
+#endif
+
 // Linker arrays combine elements from multiple translation units into a single
 // array that can be iterated over at runtime.
 //
@@ -489,12 +488,12 @@ Error, UINTPTR_MAX is undefined
 
 #if defined(__ELF__) || defined(__wasm__)
 
-#define UPB_LINKARR_APPEND(name)                          \
-  __attribute__((retain, used, section("linkarr_" #name), \
-                 no_sanitize("address")))
-#define UPB_LINKARR_DECLARE(name, type)     \
-  extern type const __start_linkarr_##name; \
-  extern type const __stop_linkarr_##name;  \
+#define UPB_LINKARR_APPEND(name) \
+  __attribute__((retain, used,   \
+                 section("linkarr_" #name))) UPB_NO_SANITIZE_ADDRESS
+#define UPB_LINKARR_DECLARE(name, type) \
+  extern type __start_linkarr_##name;   \
+  extern type __stop_linkarr_##name;    \
   UPB_LINKARR_APPEND(name) type UPB_linkarr_internal_empty_##name[1]
 #define UPB_LINKARR_START(name) (&__start_linkarr_##name)
 #define UPB_LINKARR_STOP(name) (&__stop_linkarr_##name)
@@ -502,15 +501,15 @@ Error, UINTPTR_MAX is undefined
 #elif defined(__MACH__)
 
 /* As described in: https://stackoverflow.com/a/22366882 */
-#define UPB_LINKARR_APPEND(name)                              \
-  __attribute__((retain, used, section("__DATA,__la_" #name), \
-                 no_sanitize("address")))
-#define UPB_LINKARR_DECLARE(name, type)           \
-  extern type const __start_linkarr_##name __asm( \
-      "section$start$__DATA$__la_" #name);        \
-  extern type const __stop_linkarr_##name __asm(  \
-      "section$end$__DATA$"                       \
-      "__la_" #name);                             \
+#define UPB_LINKARR_APPEND(name) \
+  __attribute__((retain, used,   \
+                 section("__DATA,__la_" #name))) UPB_NO_SANITIZE_ADDRESS
+#define UPB_LINKARR_DECLARE(name, type)     \
+  extern type __start_linkarr_##name __asm( \
+      "section$start$__DATA$__la_" #name);  \
+  extern type __stop_linkarr_##name __asm(  \
+      "section$end$__DATA$"                 \
+      "__la_" #name);                       \
   UPB_LINKARR_APPEND(name) type UPB_linkarr_internal_empty_##name[1]
 #define UPB_LINKARR_START(name) (&__start_linkarr_##name)
 #define UPB_LINKARR_STOP(name) (&__stop_linkarr_##name)
@@ -526,7 +525,7 @@ Error, UINTPTR_MAX is undefined
 // not work on MSVC.
 #define UPB_LINKARR_APPEND(name)         \
   __declspec(allocate("la_" #name "$j")) \
-  __attribute__((retain, used, no_sanitize("address")))
+  __attribute__((retain, used)) UPB_NO_SANITIZE_ADDRESS
 #define UPB_LINKARR_DECLARE(name, type)                               \
   __declspec(allocate("la_" #name "$a")) type __start_linkarr_##name; \
   __declspec(allocate("la_" #name "$z")) type __stop_linkarr_##name;  \
@@ -2947,9 +2946,10 @@ size_t upb_JsonEncode(const upb_Message* msg, const upb_MessageDef* m,
 // Must be last.
 
 static void* upb_global_allocfunc(upb_alloc* alloc, void* ptr, size_t oldsize,
-                                  size_t size) {
+                                  size_t size, size_t* actual_size) {
   UPB_UNUSED(alloc);
   UPB_UNUSED(oldsize);
+  UPB_UNUSED(actual_size);
   if (size == 0) {
     free(ptr);
     return NULL;
@@ -3007,10 +3007,13 @@ typedef struct upb_ArenaInternal {
   // == NULL at end of list.
   UPB_ATOMIC(struct upb_ArenaInternal*) next;
 
-  // If the low bit is set, is a pointer to the tail of the list (populated for
-  // roots, set to self for roots with no fused arenas). If the low bit is not
-  // set, is a pointer to the previous node in the list, such that
-  // a->previous_or_tail->next == a.
+  // - If the low bit is set, is a pointer to the tail of the list (populated
+  //   for roots, set to self for roots with no fused arenas). This is best
+  //   effort, and it may not always reflect the true tail, but it will always
+  //   be a valid node in the list. This is useful for finding the list tail
+  //   without having to walk the entire list.
+  // - If the low bit is not set, is a pointer to the previous node in the list,
+  //   such that a->previous_or_tail->next == a.
   UPB_ATOMIC(uintptr_t) previous_or_tail;
 
   // Linked list of blocks to free/cleanup.
@@ -3315,11 +3318,14 @@ void* UPB_PRIVATE(_upb_Arena_SlowMalloc)(upb_Arena* a, size_t size) {
   // We may need to exceed the max block size if the user requested a large
   // allocation.
   size_t block_size = UPB_MAX(kUpb_MemblockReserve + size, target_size);
+  upb_alloc* block_alloc = _upb_ArenaInternal_BlockAlloc(ai);
+  upb_SizedPtr alloc_result = upb_SizeReturningMalloc(block_alloc, block_size);
 
-  upb_MemBlock* block =
-      upb_malloc(_upb_ArenaInternal_BlockAlloc(ai), block_size);
+  if (!alloc_result.p) return NULL;
 
-  if (!block) return NULL;
+  upb_MemBlock* block = alloc_result.p;
+  size_t actual_block_size = alloc_result.n;
+
   // Atomic add not required here, as threads won't race allocating blocks, plus
   // atomic fetch-add is slower than load/add/store on arm devices compiled
   // targetting pre-v8.1. Relaxed order is safe as nothing depends on order of
@@ -3327,11 +3333,12 @@ void* UPB_PRIVATE(_upb_Arena_SlowMalloc)(upb_Arena* a, size_t size) {
 
   uintptr_t old_space_allocated =
       upb_Atomic_Load(&ai->space_allocated, memory_order_relaxed);
-  upb_Atomic_Store(&ai->space_allocated, old_space_allocated + block_size,
+  upb_Atomic_Store(&ai->space_allocated,
+                   old_space_allocated + actual_block_size,
                    memory_order_relaxed);
   if (UPB_UNLIKELY(insert_after_head)) {
     upb_ArenaInternal* ai = upb_Arena_Internal(a);
-    block->size_or_hint = block_size;
+    block->size_or_hint = actual_block_size;
     upb_MemBlock* head = ai->blocks;
     block->next = head->next;
     head->next = block;
@@ -3340,7 +3347,7 @@ void* UPB_PRIVATE(_upb_Arena_SlowMalloc)(upb_Arena* a, size_t size) {
     UPB_POISON_MEMORY_REGION(allocated + size, UPB_ASAN_GUARD_SIZE);
     return allocated;
   } else {
-    _upb_Arena_AddBlock(a, block, kUpb_MemblockReserve, block_size);
+    _upb_Arena_AddBlock(a, block, kUpb_MemblockReserve, actual_block_size);
     UPB_ASSERT(UPB_PRIVATE(_upb_ArenaHas)(a) >= size);
     return upb_Arena_Malloc(a, size - UPB_ASAN_GUARD_SIZE);
   }
@@ -3352,13 +3359,17 @@ static upb_Arena* _upb_Arena_InitSlow(upb_alloc* alloc, size_t first_size) {
   upb_ArenaState* a;
 
   // We need to malloc the initial block.
-  char* mem;
+
   size_t block_size =
       first_block_overhead +
       UPB_MAX(256, UPB_ALIGN_MALLOC(first_size) + UPB_ASAN_GUARD_SIZE);
-  if (!alloc || !(mem = upb_malloc(alloc, block_size))) {
+  upb_SizedPtr alloc_result;
+  if (!alloc ||
+      !(alloc_result = upb_SizeReturningMalloc(alloc, block_size)).p) {
     return NULL;
   }
+  char* mem = alloc_result.p;
+  size_t actual_block_size = alloc_result.n;
 
   a = UPB_PTR_AT(mem, kUpb_MemblockReserve, upb_ArenaState);
 
@@ -3367,12 +3378,12 @@ static upb_Arena* _upb_Arena_InitSlow(upb_alloc* alloc, size_t first_size) {
   upb_Atomic_Init(&a->body.next, NULL);
   upb_Atomic_Init(&a->body.previous_or_tail,
                   _upb_Arena_TaggedFromTail(&a->body));
-  upb_Atomic_Init(&a->body.space_allocated, block_size);
+  upb_Atomic_Init(&a->body.space_allocated, actual_block_size);
   a->body.blocks = NULL;
   a->body.upb_alloc_cleanup = NULL;
   UPB_TSAN_INIT_PUBLISHED(&a->body);
 
-  _upb_Arena_AddBlock(&a->head, mem, first_block_overhead, block_size);
+  _upb_Arena_AddBlock(&a->head, mem, first_block_overhead, actual_block_size);
 
   return &a->head;
 }
@@ -3483,48 +3494,77 @@ retry:
   goto retry;
 }
 
-static void _upb_Arena_DoFuseArenaLists(upb_ArenaInternal* const parent,
-                                        upb_ArenaInternal* child) {
+// Logically performs the following operation, in a way that is safe against
+// racing fuses:
+//   ret = TAIL(parent)
+//   ret->next = child
+//   return ret
+//
+// The caller is therefore guaranteed that ret->next == child.
+static upb_ArenaInternal* _upb_Arena_LinkForward(
+    upb_ArenaInternal* const parent, upb_ArenaInternal* child) {
   UPB_TSAN_CHECK_PUBLISHED(parent);
   uintptr_t parent_previous_or_tail =
       upb_Atomic_Load(&parent->previous_or_tail, memory_order_acquire);
-  upb_ArenaInternal* parent_tail = parent;
-  if (_upb_Arena_IsTaggedTail(parent_previous_or_tail)) {
-    // Our tail might be stale, but it will always converge to the true tail.
-    parent_tail = _upb_Arena_TailFromTagged(parent_previous_or_tail);
-  }
 
-  // Link parent to child going forwards
-  while (true) {
-    UPB_TSAN_CHECK_PUBLISHED(parent_tail);
-    upb_ArenaInternal* parent_tail_next =
-        upb_Atomic_Load(&parent_tail->next, memory_order_acquire);
+  // Optimization: use parent->previous_or_tail to skip to TAIL(parent) in O(1)
+  // time when possible. This is the common case because we just fused into
+  // parent, suggesting that it should be a root with a cached tail.
+  //
+  // However, if there was a racing fuse, parent may no longer be a root, in
+  // which case we need to walk the entire list to find the tail. The tail
+  // pointer is also not guaranteed to be the true tail, so even when the
+  // optimization is taken, we still need to walk list nodes to find the true
+  // tail.
+  upb_ArenaInternal* parent_tail =
+      _upb_Arena_IsTaggedTail(parent_previous_or_tail)
+          ? _upb_Arena_TailFromTagged(parent_previous_or_tail)
+          : parent;
+
+  UPB_TSAN_CHECK_PUBLISHED(parent_tail);
+  upb_ArenaInternal* parent_tail_next =
+      upb_Atomic_Load(&parent_tail->next, memory_order_acquire);
+
+  do {
+    // Walk the list to find the true tail (a node with next == NULL).
     while (parent_tail_next != NULL) {
       parent_tail = parent_tail_next;
       UPB_TSAN_CHECK_PUBLISHED(parent_tail);
       parent_tail_next =
           upb_Atomic_Load(&parent_tail->next, memory_order_acquire);
     }
-    if (upb_Atomic_CompareExchangeWeak(&parent_tail->next, &parent_tail_next,
-                                       child, memory_order_release,
-                                       memory_order_acquire)) {
-      break;
-    }
-    if (parent_tail_next != NULL) {
-      parent_tail = parent_tail_next;
-    }
-  }
+  } while (!upb_Atomic_CompareExchangeWeak(  // Replace a NULL next with child.
+      &parent_tail->next, &parent_tail_next, child, memory_order_release,
+      memory_order_acquire));
 
-  // Update parent's tail (may be stale).
+  return parent_tail;
+}
+
+// Updates parent->previous_or_tail = child->previous_or_tail in hopes that the
+// latter represents the true tail of the newly-combined list.
+//
+// This is a best-effort operation that may set the tail to a stale value, and
+// may fail to update the tail at all.
+void _upb_Arena_UpdateParentTail(upb_ArenaInternal* parent,
+                                 upb_ArenaInternal* child) {
+  // We are guaranteed that child->previous_or_tail is tagged, because we have
+  // just transitioned child from root -> non-root, which is an exclusive
+  // operation that can only happen once. So we are the exclusive updater of
+  // child->previous_or_tail that can transition it from tagged to untagged.
+  //
+  // However, we are not guaranteed that child->previous_or_tail is the true
+  // tail.  A racing fuse may have appended to child's list but not yet updated
+  // child->previous_or_tail.
   uintptr_t child_previous_or_tail =
       upb_Atomic_Load(&child->previous_or_tail, memory_order_acquire);
   upb_ArenaInternal* new_parent_tail =
       _upb_Arena_TailFromTagged(child_previous_or_tail);
   UPB_TSAN_CHECK_PUBLISHED(new_parent_tail);
 
-  // If another thread fused with us, don't overwrite their previous pointer
-  // with our tail. Relaxed order is fine here as we only inspect the tag bit
-  parent_previous_or_tail =
+  // If another thread fused with parent, such that it is no longer a root,
+  // don't overwrite their previous pointer with our tail. Relaxed order is fine
+  // here as we only inspect the tag bit.
+  uintptr_t parent_previous_or_tail =
       upb_Atomic_Load(&parent->previous_or_tail, memory_order_relaxed);
   if (_upb_Arena_IsTaggedTail(parent_previous_or_tail)) {
     upb_Atomic_CompareExchangeStrong(
@@ -3532,11 +3572,36 @@ static void _upb_Arena_DoFuseArenaLists(upb_ArenaInternal* const parent,
         _upb_Arena_TaggedFromTail(new_parent_tail), memory_order_release,
         memory_order_relaxed);
   }
+}
 
-  // Link child to parent going backwards, for SpaceAllocated
+static void _upb_Arena_LinkBackward(upb_ArenaInternal* child,
+                                    upb_ArenaInternal* old_parent_tail) {
+  // Link child to parent going backwards, for SpaceAllocated.  This transitions
+  // child->previous_or_tail from tail (tagged) to previous (untagged), after
+  // which its value is immutable.
+  //
+  // - We are guaranteed that no other threads are also attempting to perform
+  //   this transition (tail -> previous), because we just updated
+  //   old_parent_tail->next from NULL to non-NULL, an exclusive operation that
+  //   can only happen once.
+  //
+  // - _upb_Arena_UpdateParentTail() uses CAS to ensure that it
+  //    does not perform the reverse transition (previous -> tail).
+  //
+  // - We are guaranteed that old_parent_tail is the correct "previous" pointer,
+  //   even in the presence of racing fuses that are adding more nodes to the
+  //   list, because _upb_Arena_LinkForward() guarantees that:
+  //       old_parent_tail->next == child.
   upb_Atomic_Store(&child->previous_or_tail,
-                   _upb_Arena_TaggedFromPrevious(parent_tail),
+                   _upb_Arena_TaggedFromPrevious(old_parent_tail),
                    memory_order_release);
+}
+
+static void _upb_Arena_DoFuseArenaLists(upb_ArenaInternal* const parent,
+                                        upb_ArenaInternal* child) {
+  upb_ArenaInternal* old_parent_tail = _upb_Arena_LinkForward(parent, child);
+  _upb_Arena_UpdateParentTail(parent, child);
+  _upb_Arena_LinkBackward(child, old_parent_tail);
 }
 
 void upb_Arena_SetAllocCleanup(upb_Arena* a, upb_AllocCleanupFunc* func) {
@@ -3786,12 +3851,14 @@ upb_MessageValue upb_Array_Get(const upb_Array* arr, size_t i) {
   return ret;
 }
 
-upb_MutableMessageValue upb_Array_GetMutable(upb_Array* arr, size_t i) {
+upb_Message* upb_Array_GetMutable(upb_Array* arr, size_t i) {
   UPB_ASSERT(i < upb_Array_Size(arr));
-  upb_MutableMessageValue ret;
+  size_t elem_size = sizeof(upb_Message*);
+  UPB_ASSERT(elem_size == (1 << UPB_PRIVATE(_upb_Array_ElemSizeLg2)(arr)));
   char* data = upb_Array_MutableDataPtr(arr);
-  const int lg2 = UPB_PRIVATE(_upb_Array_ElemSizeLg2)(arr);
-  memcpy(&ret, data + (i << lg2), 1 << lg2);
+  upb_Message* ret;
+  memcpy(&ret, data + (i * elem_size), elem_size);
+  UPB_ASSERT(!upb_Message_IsFrozen(ret));
   return ret;
 }
 
@@ -3956,6 +4023,16 @@ size_t upb_Map_Size(const upb_Map* map) { return _upb_Map_Size(map); }
 bool upb_Map_Get(const upb_Map* map, upb_MessageValue key,
                  upb_MessageValue* val) {
   return _upb_Map_Get(map, &key, map->key_size, val, map->val_size);
+}
+
+struct upb_Message* upb_Map_GetMutable(upb_Map* map, upb_MessageValue key) {
+  UPB_ASSERT(map->val_size == sizeof(upb_Message*));
+  upb_Message* val = NULL;
+  if (_upb_Map_Get(map, &key, map->key_size, &val, sizeof(upb_Message*))) {
+    return val;
+  } else {
+    return NULL;
+  }
 }
 
 void upb_Map_Clear(upb_Map* map) { _upb_Map_Clear(map); }
@@ -5317,7 +5394,7 @@ upb_Message* _upb_Message_Copy(upb_Message* dst, const upb_Message* src,
       upb_StringView* unknown = upb_TaggedAuxPtr_UnknownData(tagged_ptr);
       // Make a copy into destination arena.
       if (!UPB_PRIVATE(_upb_Message_AddUnknown)(dst, unknown->data,
-                                                unknown->size, arena, false)) {
+                                                unknown->size, arena, NULL)) {
         return NULL;
       }
     }
@@ -6574,7 +6651,7 @@ failure:
 
 #ifdef UPB_LINKARR_DECLARE
 
-UPB_LINKARR_DECLARE(upb_AllExts, upb_MiniTableExtension);
+UPB_LINKARR_DECLARE(upb_AllExts, const upb_MiniTableExtension);
 
 bool upb_ExtensionRegistry_AddAllLinkedExtensions(upb_ExtensionRegistry* r) {
   const upb_MiniTableExtension* start = UPB_LINKARR_START(upb_AllExts);
@@ -7143,7 +7220,7 @@ bool _upb_Decoder_CheckEnum(upb_Decoder* d, const char* ptr, upb_Message* msg,
   end = upb_Decoder_EncodeVarint32(v, end);
 
   if (!UPB_PRIVATE(_upb_Message_AddUnknown)(unknown_msg, buf, end - buf,
-                                            &d->arena, false)) {
+                                            &d->arena, NULL)) {
     _upb_Decoder_ErrorJmp(d, kUpb_DecodeStatus_OutOfMemory);
   }
   return false;
@@ -8037,9 +8114,9 @@ static const char* _upb_Decoder_DecodeUnknownField(upb_Decoder* d,
     // bounds checks are needed before adding the unknown field.
     _upb_Decoder_IsDone(d, &ptr);
     const char* input_ptr = upb_EpsCopyInputStream_GetInputPtr(&d->input, ptr);
-    if (!UPB_PRIVATE(_upb_Message_AddUnknown)(msg, input_start,
-                                              input_ptr - input_start,
-                                              &d->arena, d->input.aliasing)) {
+    if (!UPB_PRIVATE(_upb_Message_AddUnknown)(
+            msg, input_start, input_ptr - input_start, &d->arena,
+            d->input.aliasing ? d->input.buffer_start : NULL)) {
       _upb_Decoder_ErrorJmp(d, kUpb_DecodeStatus_OutOfMemory);
     }
   } else if (wire_type == kUpb_WireType_StartGroup) {
@@ -8117,6 +8194,7 @@ static const char* _upb_Decoder_DecodeMessage(upb_Decoder* d, const char* ptr,
              : ptr;
 }
 
+#if UPB_FASTTABLE
 const char* _upb_FastDecoder_DecodeGeneric(struct upb_Decoder* d,
                                            const char* ptr, upb_Message* msg,
                                            intptr_t table, uint64_t hasbits,
@@ -8125,6 +8203,7 @@ const char* _upb_FastDecoder_DecodeGeneric(struct upb_Decoder* d,
   *(uint32_t*)msg |= hasbits;
   return _upb_Decoder_DecodeMessage(d, ptr, msg, decode_totablep(table));
 }
+#endif
 
 static upb_DecodeStatus _upb_Decoder_DecodeTop(struct upb_Decoder* d,
                                                const char* buf,
@@ -8969,994 +9048,6 @@ const char* upb_EncodeStatus_String(upb_EncodeStatus status) {
   }
 }
 
-// Fast decoder: ~3x the speed of decode.c, but requires x86-64/ARM64.
-// Also the table size grows by 2x.
-//
-// Could potentially be ported to other 64-bit archs that pass at least six
-// arguments in registers and have 8 unused high bits in pointers.
-//
-// The overall design is to create specialized functions for every possible
-// field type (eg. oneof boolean field with a 1 byte tag) and then dispatch
-// to the specialized function as quickly as possible.
-
-
-
-// Must be last.
-
-#if UPB_FASTTABLE
-
-// The standard set of arguments passed to each parsing function.
-// Thanks to x86-64 calling conventions, these will stay in registers.
-#define UPB_PARSE_PARAMS                                             \
-  upb_Decoder *d, const char *ptr, upb_Message *msg, intptr_t table, \
-      uint64_t hasbits, uint64_t data
-
-#define UPB_PARSE_ARGS d, ptr, msg, table, hasbits, data
-
-#define RETURN_GENERIC(m)                                 \
-  /* Uncomment either of these for debugging purposes. */ \
-  /* fprintf(stderr, m); */                               \
-  /*__builtin_trap(); */                                  \
-  return _upb_FastDecoder_DecodeGeneric(d, ptr, msg, table, hasbits, 0);
-
-typedef enum {
-  CARD_s = 0, /* Singular (optional, non-repeated) */
-  CARD_o = 1, /* Oneof */
-  CARD_r = 2, /* Repeated */
-  CARD_p = 3  /* Packed Repeated */
-} upb_card;
-
-UPB_NOINLINE
-static const char* fastdecode_isdonefallback(UPB_PARSE_PARAMS) {
-  int overrun = data;
-  ptr = _upb_EpsCopyInputStream_IsDoneFallbackInline(
-      &d->input, ptr, overrun, _upb_Decoder_BufferFlipCallback);
-  data = _upb_FastDecoder_LoadTag(ptr);
-  UPB_MUSTTAIL return _upb_FastDecoder_TagDispatch(UPB_PARSE_ARGS);
-}
-
-UPB_FORCEINLINE
-const char* fastdecode_dispatch(UPB_PARSE_PARAMS) {
-  int overrun;
-  switch (upb_EpsCopyInputStream_IsDoneStatus(&d->input, ptr, &overrun)) {
-    case kUpb_IsDoneStatus_Done:
-      ((uint32_t*)msg)[2] |= hasbits;  // Sync hasbits.
-      const upb_MiniTable* m = decode_totablep(table);
-      return UPB_UNLIKELY(m->UPB_PRIVATE(required_count))
-                 ? _upb_Decoder_CheckRequired(d, ptr, msg, m)
-                 : ptr;
-    case kUpb_IsDoneStatus_NotDone:
-      break;
-    case kUpb_IsDoneStatus_NeedFallback:
-      data = overrun;
-      UPB_MUSTTAIL return fastdecode_isdonefallback(UPB_PARSE_ARGS);
-  }
-
-  // Read two bytes of tag data (for a one-byte tag, the high byte is junk).
-  data = _upb_FastDecoder_LoadTag(ptr);
-  UPB_MUSTTAIL return _upb_FastDecoder_TagDispatch(UPB_PARSE_ARGS);
-}
-
-UPB_FORCEINLINE
-bool fastdecode_checktag(uint16_t data, int tagbytes) {
-  if (tagbytes == 1) {
-    return (data & 0xff) == 0;
-  } else {
-    return data == 0;
-  }
-}
-
-UPB_FORCEINLINE
-const char* fastdecode_longsize(const char* ptr, int* size) {
-  int i;
-  UPB_ASSERT(*size & 0x80);
-  *size &= 0xff;
-  for (i = 0; i < 3; i++) {
-    ptr++;
-    size_t byte = (uint8_t)ptr[-1];
-    *size += (byte - 1) << (7 + 7 * i);
-    if (UPB_LIKELY((byte & 0x80) == 0)) return ptr;
-  }
-  ptr++;
-  size_t byte = (uint8_t)ptr[-1];
-  // len is limited by 2gb not 4gb, hence 8 and not 16 as normally expected
-  // for a 32 bit varint.
-  if (UPB_UNLIKELY(byte >= 8)) return NULL;
-  *size += (byte - 1) << 28;
-  return ptr;
-}
-
-UPB_FORCEINLINE
-const char* fastdecode_delimited(
-    upb_Decoder* d, const char* ptr,
-    upb_EpsCopyInputStream_ParseDelimitedFunc* func, void* ctx) {
-  ptr++;
-
-  // Sign-extend so varint greater than one byte becomes negative, causing
-  // fast delimited parse to fail.
-  int len = (int8_t)ptr[-1];
-
-  if (!upb_EpsCopyInputStream_TryParseDelimitedFast(&d->input, &ptr, len, func,
-                                                    ctx)) {
-    // Slow case: Sub-message is >=128 bytes and/or exceeds the current buffer.
-    // If it exceeds the buffer limit, limit/limit_ptr will change during
-    // sub-message parsing, so we need to preserve delta, not limit.
-    if (UPB_UNLIKELY(len & 0x80)) {
-      // Size varint >1 byte (length >= 128).
-      ptr = fastdecode_longsize(ptr, &len);
-      if (!ptr) {
-        // Corrupt wire format: size exceeded INT_MAX.
-        return NULL;
-      }
-    }
-    if (!upb_EpsCopyInputStream_CheckSize(&d->input, ptr, len)) {
-      // Corrupt wire format: invalid limit.
-      return NULL;
-    }
-    int delta = upb_EpsCopyInputStream_PushLimit(&d->input, ptr, len);
-    ptr = func(&d->input, ptr, ctx);
-    upb_EpsCopyInputStream_PopLimit(&d->input, ptr, delta);
-  }
-  return ptr;
-}
-
-/* singular, oneof, repeated field handling ***********************************/
-
-typedef struct {
-  upb_Array* arr;
-  void* end;
-} fastdecode_arr;
-
-typedef enum {
-  FD_NEXT_ATLIMIT,
-  FD_NEXT_SAMEFIELD,
-  FD_NEXT_OTHERFIELD
-} fastdecode_next;
-
-typedef struct {
-  void* dst;
-  fastdecode_next next;
-  uint32_t tag;
-} fastdecode_nextret;
-
-UPB_FORCEINLINE
-void* fastdecode_resizearr(upb_Decoder* d, void* dst, fastdecode_arr* farr,
-                           int valbytes) {
-  if (UPB_UNLIKELY(dst == farr->end)) {
-    size_t old_capacity = farr->arr->UPB_PRIVATE(capacity);
-    size_t old_bytes = old_capacity * valbytes;
-    size_t new_capacity = old_capacity * 2;
-    size_t new_bytes = new_capacity * valbytes;
-    char* old_ptr = upb_Array_MutableDataPtr(farr->arr);
-    char* new_ptr = upb_Arena_Realloc(&d->arena, old_ptr, old_bytes, new_bytes);
-    uint8_t elem_size_lg2 = __builtin_ctz(valbytes);
-    UPB_PRIVATE(_upb_Array_SetTaggedPtr)(farr->arr, new_ptr, elem_size_lg2);
-    farr->arr->UPB_PRIVATE(capacity) = new_capacity;
-    dst = (void*)(new_ptr + (old_capacity * valbytes));
-    farr->end = (void*)(new_ptr + (new_capacity * valbytes));
-  }
-  return dst;
-}
-
-UPB_FORCEINLINE
-bool fastdecode_tagmatch(uint32_t tag, uint64_t data, int tagbytes) {
-  if (tagbytes == 1) {
-    return (uint8_t)tag == (uint8_t)data;
-  } else {
-    return (uint16_t)tag == (uint16_t)data;
-  }
-}
-
-UPB_FORCEINLINE
-void fastdecode_commitarr(void* dst, fastdecode_arr* farr, int valbytes) {
-  farr->arr->UPB_PRIVATE(size) =
-      (size_t)((char*)dst - (char*)upb_Array_MutableDataPtr(farr->arr)) /
-      valbytes;
-}
-
-UPB_FORCEINLINE
-fastdecode_nextret fastdecode_nextrepeated(upb_Decoder* d, void* dst,
-                                           const char** ptr,
-                                           fastdecode_arr* farr, uint64_t data,
-                                           int tagbytes, int valbytes) {
-  fastdecode_nextret ret;
-  dst = (char*)dst + valbytes;
-
-  if (UPB_LIKELY(!_upb_Decoder_IsDone(d, ptr))) {
-    ret.tag = _upb_FastDecoder_LoadTag(*ptr);
-    if (fastdecode_tagmatch(ret.tag, data, tagbytes)) {
-      ret.next = FD_NEXT_SAMEFIELD;
-    } else {
-      fastdecode_commitarr(dst, farr, valbytes);
-      ret.next = FD_NEXT_OTHERFIELD;
-    }
-  } else {
-    fastdecode_commitarr(dst, farr, valbytes);
-    ret.next = FD_NEXT_ATLIMIT;
-  }
-
-  ret.dst = dst;
-  return ret;
-}
-
-UPB_FORCEINLINE
-void* fastdecode_fieldmem(upb_Message* msg, uint64_t data) {
-  size_t ofs = data >> 48;
-  return (char*)msg + ofs;
-}
-
-UPB_FORCEINLINE
-void* fastdecode_getfield(upb_Decoder* d, const char* ptr, upb_Message* msg,
-                          uint64_t* data, uint64_t* hasbits,
-                          fastdecode_arr* farr, int valbytes, upb_card card) {
-  UPB_ASSERT(!upb_Message_IsFrozen(msg));
-  switch (card) {
-    case CARD_s: {
-      uint8_t hasbit_index = *data >> 24;
-      // Set hasbit and return pointer to scalar field.
-      *hasbits |= 1ull << hasbit_index;
-      return fastdecode_fieldmem(msg, *data);
-    }
-    case CARD_o: {
-      uint16_t case_ofs = *data >> 32;
-      uint32_t* oneof_case = UPB_PTR_AT(msg, case_ofs, uint32_t);
-      uint8_t field_number = *data >> 24;
-      *oneof_case = field_number;
-      return fastdecode_fieldmem(msg, *data);
-    }
-    case CARD_r: {
-      // Get pointer to upb_Array and allocate/expand if necessary.
-      uint8_t elem_size_lg2 = __builtin_ctz(valbytes);
-      upb_Array** arr_p = fastdecode_fieldmem(msg, *data);
-      char* begin;
-      ((uint32_t*)msg)[2] |= *hasbits;
-      *hasbits = 0;
-      if (UPB_LIKELY(!*arr_p)) {
-        farr->arr = UPB_PRIVATE(_upb_Array_New)(&d->arena, 8, elem_size_lg2);
-        *arr_p = farr->arr;
-      } else {
-        farr->arr = *arr_p;
-      }
-      begin = upb_Array_MutableDataPtr(farr->arr);
-      farr->end = begin + (farr->arr->UPB_PRIVATE(capacity) * valbytes);
-      *data = _upb_FastDecoder_LoadTag(ptr);
-      return begin + (farr->arr->UPB_PRIVATE(size) * valbytes);
-    }
-    default:
-      UPB_UNREACHABLE();
-  }
-}
-
-UPB_FORCEINLINE
-bool fastdecode_flippacked(uint64_t* data, int tagbytes) {
-  *data ^= (0x2 ^ 0x0);  // Patch data to match packed wiretype.
-  return fastdecode_checktag(*data, tagbytes);
-}
-
-#define FASTDECODE_CHECKPACKED(tagbytes, card, func)                \
-  if (UPB_UNLIKELY(!fastdecode_checktag(data, tagbytes))) {         \
-    if (card == CARD_r && fastdecode_flippacked(&data, tagbytes)) { \
-      UPB_MUSTTAIL return func(UPB_PARSE_ARGS);                     \
-    }                                                               \
-    RETURN_GENERIC("packed check tag mismatch\n");                  \
-  }
-
-/* varint fields **************************************************************/
-
-UPB_FORCEINLINE
-uint64_t fastdecode_munge(uint64_t val, int valbytes, bool zigzag) {
-  if (valbytes == 1) {
-    return val != 0;
-  } else if (zigzag) {
-    if (valbytes == 4) {
-      uint32_t n = val;
-      return (n >> 1) ^ -(int32_t)(n & 1);
-    } else if (valbytes == 8) {
-      return (val >> 1) ^ -(int64_t)(val & 1);
-    }
-    UPB_UNREACHABLE();
-  }
-  return val;
-}
-
-UPB_FORCEINLINE
-const char* fastdecode_varint64(const char* ptr, uint64_t* val) {
-  ptr++;
-  *val = (uint8_t)ptr[-1];
-  if (UPB_UNLIKELY(*val & 0x80)) {
-    int i;
-    for (i = 0; i < 8; i++) {
-      ptr++;
-      uint64_t byte = (uint8_t)ptr[-1];
-      *val += (byte - 1) << (7 + 7 * i);
-      if (UPB_LIKELY((byte & 0x80) == 0)) goto done;
-    }
-    ptr++;
-    uint64_t byte = (uint8_t)ptr[-1];
-    if (byte > 1) {
-      return NULL;
-    }
-    *val += (byte - 1) << 63;
-  }
-done:
-  UPB_ASSUME(ptr != NULL);
-  return ptr;
-}
-
-#define FASTDECODE_UNPACKEDVARINT(d, ptr, msg, table, hasbits, data, tagbytes, \
-                                  valbytes, card, zigzag, packed)              \
-  uint64_t val;                                                                \
-  void* dst;                                                                   \
-  fastdecode_arr farr;                                                         \
-                                                                               \
-  FASTDECODE_CHECKPACKED(tagbytes, card, packed);                              \
-                                                                               \
-  dst = fastdecode_getfield(d, ptr, msg, &data, &hasbits, &farr, valbytes,     \
-                            card);                                             \
-  if (card == CARD_r) {                                                        \
-    if (UPB_UNLIKELY(!dst)) {                                                  \
-      RETURN_GENERIC("need array resize\n");                                   \
-    }                                                                          \
-  }                                                                            \
-                                                                               \
-  again:                                                                       \
-  if (card == CARD_r) {                                                        \
-    dst = fastdecode_resizearr(d, dst, &farr, valbytes);                       \
-  }                                                                            \
-                                                                               \
-  ptr += tagbytes;                                                             \
-  ptr = fastdecode_varint64(ptr, &val);                                        \
-  if (ptr == NULL) _upb_FastDecoder_ErrorJmp(d, kUpb_DecodeStatus_Malformed);  \
-  val = fastdecode_munge(val, valbytes, zigzag);                               \
-  memcpy(dst, &val, valbytes);                                                 \
-                                                                               \
-  if (card == CARD_r) {                                                        \
-    fastdecode_nextret ret = fastdecode_nextrepeated(                          \
-        d, dst, &ptr, &farr, data, tagbytes, valbytes);                        \
-    switch (ret.next) {                                                        \
-      case FD_NEXT_SAMEFIELD:                                                  \
-        dst = ret.dst;                                                         \
-        goto again;                                                            \
-      case FD_NEXT_OTHERFIELD:                                                 \
-        data = ret.tag;                                                        \
-        UPB_MUSTTAIL return _upb_FastDecoder_TagDispatch(UPB_PARSE_ARGS);      \
-      case FD_NEXT_ATLIMIT:                                                    \
-        return ptr;                                                            \
-    }                                                                          \
-  }                                                                            \
-                                                                               \
-  UPB_MUSTTAIL return fastdecode_dispatch(UPB_PARSE_ARGS);
-
-typedef struct {
-  uint8_t valbytes;
-  bool zigzag;
-  void* dst;
-  fastdecode_arr farr;
-} fastdecode_varintdata;
-
-UPB_FORCEINLINE
-const char* fastdecode_topackedvarint(upb_EpsCopyInputStream* e,
-                                      const char* ptr, void* ctx) {
-  upb_Decoder* d = (upb_Decoder*)e;
-  fastdecode_varintdata* data = ctx;
-  void* dst = data->dst;
-  uint64_t val;
-
-  while (!_upb_Decoder_IsDone(d, &ptr)) {
-    dst = fastdecode_resizearr(d, dst, &data->farr, data->valbytes);
-    ptr = fastdecode_varint64(ptr, &val);
-    if (ptr == NULL) return NULL;
-    val = fastdecode_munge(val, data->valbytes, data->zigzag);
-    memcpy(dst, &val, data->valbytes);
-    dst = (char*)dst + data->valbytes;
-  }
-
-  fastdecode_commitarr(dst, &data->farr, data->valbytes);
-  return ptr;
-}
-
-#define FASTDECODE_PACKEDVARINT(d, ptr, msg, table, hasbits, data, tagbytes, \
-                                valbytes, zigzag, unpacked)                  \
-  fastdecode_varintdata ctx = {valbytes, zigzag};                            \
-                                                                             \
-  FASTDECODE_CHECKPACKED(tagbytes, CARD_r, unpacked);                        \
-                                                                             \
-  ctx.dst = fastdecode_getfield(d, ptr, msg, &data, &hasbits, &ctx.farr,     \
-                                valbytes, CARD_r);                           \
-  if (UPB_UNLIKELY(!ctx.dst)) {                                              \
-    RETURN_GENERIC("need array resize\n");                                   \
-  }                                                                          \
-                                                                             \
-  ptr += tagbytes;                                                           \
-  ptr = fastdecode_delimited(d, ptr, &fastdecode_topackedvarint, &ctx);      \
-                                                                             \
-  if (UPB_UNLIKELY(ptr == NULL)) {                                           \
-    _upb_FastDecoder_ErrorJmp(d, kUpb_DecodeStatus_Malformed);               \
-  }                                                                          \
-                                                                             \
-  UPB_MUSTTAIL return fastdecode_dispatch(d, ptr, msg, table, hasbits, 0);
-
-#define FASTDECODE_VARINT(d, ptr, msg, table, hasbits, data, tagbytes,     \
-                          valbytes, card, zigzag, unpacked, packed)        \
-  if (card == CARD_p) {                                                    \
-    FASTDECODE_PACKEDVARINT(d, ptr, msg, table, hasbits, data, tagbytes,   \
-                            valbytes, zigzag, unpacked);                   \
-  } else {                                                                 \
-    FASTDECODE_UNPACKEDVARINT(d, ptr, msg, table, hasbits, data, tagbytes, \
-                              valbytes, card, zigzag, packed);             \
-  }
-
-#define z_ZZ true
-#define b_ZZ false
-#define v_ZZ false
-
-/* Generate all combinations:
- * {s,o,r,p} x {b1,v4,z4,v8,z8} x {1bt,2bt} */
-
-#define F(card, type, valbytes, tagbytes)                                      \
-  UPB_NOINLINE                                                                 \
-  const char* upb_p##card##type##valbytes##_##tagbytes##bt(UPB_PARSE_PARAMS) { \
-    FASTDECODE_VARINT(d, ptr, msg, table, hasbits, data, tagbytes, valbytes,   \
-                      CARD_##card, type##_ZZ,                                  \
-                      upb_pr##type##valbytes##_##tagbytes##bt,                 \
-                      upb_pp##type##valbytes##_##tagbytes##bt);                \
-  }
-
-#define TYPES(card, tagbytes) \
-  F(card, b, 1, tagbytes)     \
-  F(card, v, 4, tagbytes)     \
-  F(card, v, 8, tagbytes)     \
-  F(card, z, 4, tagbytes)     \
-  F(card, z, 8, tagbytes)
-
-#define TAGBYTES(card) \
-  TYPES(card, 1)       \
-  TYPES(card, 2)
-
-TAGBYTES(s)
-TAGBYTES(o)
-TAGBYTES(r)
-TAGBYTES(p)
-
-#undef z_ZZ
-#undef b_ZZ
-#undef v_ZZ
-#undef o_ONEOF
-#undef s_ONEOF
-#undef r_ONEOF
-#undef F
-#undef TYPES
-#undef TAGBYTES
-#undef FASTDECODE_UNPACKEDVARINT
-#undef FASTDECODE_PACKEDVARINT
-#undef FASTDECODE_VARINT
-
-/* fixed fields ***************************************************************/
-
-#define FASTDECODE_UNPACKEDFIXED(d, ptr, msg, table, hasbits, data, tagbytes, \
-                                 valbytes, card, packed)                      \
-  void* dst;                                                                  \
-  fastdecode_arr farr;                                                        \
-                                                                              \
-  FASTDECODE_CHECKPACKED(tagbytes, card, packed)                              \
-                                                                              \
-  dst = fastdecode_getfield(d, ptr, msg, &data, &hasbits, &farr, valbytes,    \
-                            card);                                            \
-  if (card == CARD_r) {                                                       \
-    if (UPB_UNLIKELY(!dst)) {                                                 \
-      RETURN_GENERIC("couldn't allocate array in arena\n");                   \
-    }                                                                         \
-  }                                                                           \
-                                                                              \
-  again:                                                                      \
-  if (card == CARD_r) {                                                       \
-    dst = fastdecode_resizearr(d, dst, &farr, valbytes);                      \
-  }                                                                           \
-                                                                              \
-  ptr += tagbytes;                                                            \
-  memcpy(dst, ptr, valbytes);                                                 \
-  ptr += valbytes;                                                            \
-                                                                              \
-  if (card == CARD_r) {                                                       \
-    fastdecode_nextret ret = fastdecode_nextrepeated(                         \
-        d, dst, &ptr, &farr, data, tagbytes, valbytes);                       \
-    switch (ret.next) {                                                       \
-      case FD_NEXT_SAMEFIELD:                                                 \
-        dst = ret.dst;                                                        \
-        goto again;                                                           \
-      case FD_NEXT_OTHERFIELD:                                                \
-        data = ret.tag;                                                       \
-        UPB_MUSTTAIL return _upb_FastDecoder_TagDispatch(UPB_PARSE_ARGS);     \
-      case FD_NEXT_ATLIMIT:                                                   \
-        return ptr;                                                           \
-    }                                                                         \
-  }                                                                           \
-                                                                              \
-  UPB_MUSTTAIL return fastdecode_dispatch(UPB_PARSE_ARGS);
-
-#define FASTDECODE_PACKEDFIXED(d, ptr, msg, table, hasbits, data, tagbytes, \
-                               valbytes, unpacked)                          \
-  FASTDECODE_CHECKPACKED(tagbytes, CARD_r, unpacked)                        \
-                                                                            \
-  ptr += tagbytes;                                                          \
-  int size = (uint8_t)ptr[0];                                               \
-  ptr++;                                                                    \
-  if (size & 0x80) {                                                        \
-    ptr = fastdecode_longsize(ptr, &size);                                  \
-  }                                                                         \
-                                                                            \
-  if (UPB_UNLIKELY(!upb_EpsCopyInputStream_CheckDataSizeAvailable(          \
-                       &d->input, ptr, size) ||                             \
-                   (size % valbytes) != 0)) {                               \
-    _upb_FastDecoder_ErrorJmp(d, kUpb_DecodeStatus_Malformed);              \
-  }                                                                         \
-                                                                            \
-  upb_Array** arr_p = fastdecode_fieldmem(msg, data);                       \
-  upb_Array* arr = *arr_p;                                                  \
-  uint8_t elem_size_lg2 = __builtin_ctz(valbytes);                          \
-  int elems = size / valbytes;                                              \
-                                                                            \
-  if (UPB_LIKELY(!arr)) {                                                   \
-    *arr_p = arr =                                                          \
-        UPB_PRIVATE(_upb_Array_New)(&d->arena, elems, elem_size_lg2);       \
-    if (!arr) {                                                             \
-      _upb_FastDecoder_ErrorJmp(d, kUpb_DecodeStatus_Malformed);            \
-    }                                                                       \
-  } else {                                                                  \
-    UPB_PRIVATE(_upb_Array_ResizeUninitialized)(arr, elems, &d->arena);     \
-  }                                                                         \
-                                                                            \
-  char* dst = upb_Array_MutableDataPtr(arr);                                \
-  memcpy(dst, ptr, size);                                                   \
-  arr->UPB_PRIVATE(size) = elems;                                           \
-                                                                            \
-  ptr += size;                                                              \
-  UPB_MUSTTAIL return fastdecode_dispatch(UPB_PARSE_ARGS);
-
-#define FASTDECODE_FIXED(d, ptr, msg, table, hasbits, data, tagbytes,     \
-                         valbytes, card, unpacked, packed)                \
-  if (card == CARD_p) {                                                   \
-    FASTDECODE_PACKEDFIXED(d, ptr, msg, table, hasbits, data, tagbytes,   \
-                           valbytes, unpacked);                           \
-  } else {                                                                \
-    FASTDECODE_UNPACKEDFIXED(d, ptr, msg, table, hasbits, data, tagbytes, \
-                             valbytes, card, packed);                     \
-  }
-
-/* Generate all combinations:
- * {s,o,r,p} x {f4,f8} x {1bt,2bt} */
-
-#define F(card, valbytes, tagbytes)                                         \
-  UPB_NOINLINE                                                              \
-  const char* upb_p##card##f##valbytes##_##tagbytes##bt(UPB_PARSE_PARAMS) { \
-    FASTDECODE_FIXED(d, ptr, msg, table, hasbits, data, tagbytes, valbytes, \
-                     CARD_##card, upb_ppf##valbytes##_##tagbytes##bt,       \
-                     upb_prf##valbytes##_##tagbytes##bt);                   \
-  }
-
-#define TYPES(card, tagbytes) \
-  F(card, 4, tagbytes)        \
-  F(card, 8, tagbytes)
-
-#define TAGBYTES(card) \
-  TYPES(card, 1)       \
-  TYPES(card, 2)
-
-TAGBYTES(s)
-TAGBYTES(o)
-TAGBYTES(r)
-TAGBYTES(p)
-
-#undef F
-#undef TYPES
-#undef TAGBYTES
-#undef FASTDECODE_UNPACKEDFIXED
-#undef FASTDECODE_PACKEDFIXED
-
-/* string fields **************************************************************/
-
-typedef const char* fastdecode_copystr_func(struct upb_Decoder* d,
-                                            const char* ptr, upb_Message* msg,
-                                            const upb_MiniTable* table,
-                                            uint64_t hasbits,
-                                            upb_StringView* dst);
-
-UPB_NOINLINE
-static const char* fastdecode_verifyutf8(upb_Decoder* d, const char* ptr,
-                                         upb_Message* msg, intptr_t table,
-                                         uint64_t hasbits, uint64_t data) {
-  UPB_ASSERT(!upb_Message_IsFrozen(msg));
-  upb_StringView* dst = (upb_StringView*)data;
-  if (!_upb_Decoder_VerifyUtf8Inline(dst->data, dst->size)) {
-    _upb_FastDecoder_ErrorJmp(d, kUpb_DecodeStatus_BadUtf8);
-  }
-  UPB_MUSTTAIL return fastdecode_dispatch(UPB_PARSE_ARGS);
-}
-
-#define FASTDECODE_LONGSTRING(d, ptr, msg, table, hasbits, dst, validate_utf8) \
-  int size = (uint8_t)ptr[0]; /* Could plumb through hasbits. */               \
-  ptr++;                                                                       \
-  if (size & 0x80) {                                                           \
-    ptr = fastdecode_longsize(ptr, &size);                                     \
-  }                                                                            \
-                                                                               \
-  if (UPB_UNLIKELY(!upb_EpsCopyInputStream_CheckSize(&d->input, ptr, size))) { \
-    dst->size = 0;                                                             \
-    _upb_FastDecoder_ErrorJmp(d, kUpb_DecodeStatus_Malformed);                 \
-  }                                                                            \
-                                                                               \
-  const char* s_ptr = ptr;                                                     \
-  ptr = upb_EpsCopyInputStream_ReadString(&d->input, &s_ptr, size, &d->arena); \
-  if (!ptr) _upb_FastDecoder_ErrorJmp(d, kUpb_DecodeStatus_OutOfMemory);       \
-  dst->data = s_ptr;                                                           \
-  dst->size = size;                                                            \
-                                                                               \
-  if (validate_utf8) {                                                         \
-    data = (uint64_t)dst;                                                      \
-    UPB_MUSTTAIL return fastdecode_verifyutf8(UPB_PARSE_ARGS);                 \
-  } else {                                                                     \
-    UPB_MUSTTAIL return fastdecode_dispatch(UPB_PARSE_ARGS);                   \
-  }
-
-UPB_NOINLINE
-static const char* fastdecode_longstring_utf8(struct upb_Decoder* d,
-                                              const char* ptr, upb_Message* msg,
-                                              intptr_t table, uint64_t hasbits,
-                                              uint64_t data) {
-  upb_StringView* dst = (upb_StringView*)data;
-  FASTDECODE_LONGSTRING(d, ptr, msg, table, hasbits, dst, true);
-}
-
-UPB_NOINLINE
-static const char* fastdecode_longstring_noutf8(
-    struct upb_Decoder* d, const char* ptr, upb_Message* msg, intptr_t table,
-    uint64_t hasbits, uint64_t data) {
-  UPB_ASSERT(!upb_Message_IsFrozen(msg));
-  upb_StringView* dst = (upb_StringView*)data;
-  FASTDECODE_LONGSTRING(d, ptr, msg, table, hasbits, dst, false);
-}
-
-UPB_FORCEINLINE
-void fastdecode_docopy(upb_Decoder* d, const char* ptr, uint32_t size, int copy,
-                       char* data, size_t data_offset, upb_StringView* dst) {
-  d->arena.UPB_PRIVATE(ptr) += copy;
-  dst->data = data + data_offset;
-  UPB_UNPOISON_MEMORY_REGION(data, copy);
-  memcpy(data, ptr, copy);
-  UPB_POISON_MEMORY_REGION(data + data_offset + size,
-                           copy - data_offset - size);
-}
-
-#define FASTDECODE_COPYSTRING(d, ptr, msg, table, hasbits, data, tagbytes,     \
-                              card, validate_utf8)                             \
-  upb_StringView* dst;                                                         \
-  fastdecode_arr farr;                                                         \
-  int64_t size;                                                                \
-  size_t arena_has;                                                            \
-  size_t common_has;                                                           \
-  char* buf;                                                                   \
-                                                                               \
-  UPB_ASSERT(!upb_EpsCopyInputStream_AliasingAvailable(&d->input, ptr, 0));    \
-  UPB_ASSERT(fastdecode_checktag(data, tagbytes));                             \
-                                                                               \
-  dst = fastdecode_getfield(d, ptr, msg, &data, &hasbits, &farr,               \
-                            sizeof(upb_StringView), card);                     \
-                                                                               \
-  again:                                                                       \
-  if (card == CARD_r) {                                                        \
-    dst = fastdecode_resizearr(d, dst, &farr, sizeof(upb_StringView));         \
-  }                                                                            \
-                                                                               \
-  size = (uint8_t)ptr[tagbytes];                                               \
-  ptr += tagbytes + 1;                                                         \
-  dst->size = size;                                                            \
-                                                                               \
-  buf = d->arena.UPB_PRIVATE(ptr);                                             \
-  arena_has = UPB_PRIVATE(_upb_ArenaHas)(&d->arena);                           \
-  common_has = UPB_MIN(arena_has,                                              \
-                       upb_EpsCopyInputStream_BytesAvailable(&d->input, ptr)); \
-                                                                               \
-  if (UPB_LIKELY(size <= 15 - tagbytes)) {                                     \
-    if (arena_has < 16) goto longstr;                                          \
-    fastdecode_docopy(d, ptr - tagbytes - 1, size, 16, buf, tagbytes + 1,      \
-                      dst);                                                    \
-  } else if (UPB_LIKELY(size <= 32)) {                                         \
-    if (UPB_UNLIKELY(common_has < 32)) goto longstr;                           \
-    fastdecode_docopy(d, ptr, size, 32, buf, 0, dst);                          \
-  } else if (UPB_LIKELY(size <= 64)) {                                         \
-    if (UPB_UNLIKELY(common_has < 64)) goto longstr;                           \
-    fastdecode_docopy(d, ptr, size, 64, buf, 0, dst);                          \
-  } else if (UPB_LIKELY(size < 128)) {                                         \
-    if (UPB_UNLIKELY(common_has < 128)) goto longstr;                          \
-    fastdecode_docopy(d, ptr, size, 128, buf, 0, dst);                         \
-  } else {                                                                     \
-    goto longstr;                                                              \
-  }                                                                            \
-                                                                               \
-  ptr += size;                                                                 \
-                                                                               \
-  if (card == CARD_r) {                                                        \
-    if (validate_utf8 &&                                                       \
-        !_upb_Decoder_VerifyUtf8Inline(dst->data, dst->size)) {                \
-      _upb_FastDecoder_ErrorJmp(d, kUpb_DecodeStatus_BadUtf8);                 \
-    }                                                                          \
-    fastdecode_nextret ret = fastdecode_nextrepeated(                          \
-        d, dst, &ptr, &farr, data, tagbytes, sizeof(upb_StringView));          \
-    switch (ret.next) {                                                        \
-      case FD_NEXT_SAMEFIELD:                                                  \
-        dst = ret.dst;                                                         \
-        goto again;                                                            \
-      case FD_NEXT_OTHERFIELD:                                                 \
-        data = ret.tag;                                                        \
-        UPB_MUSTTAIL return _upb_FastDecoder_TagDispatch(UPB_PARSE_ARGS);      \
-      case FD_NEXT_ATLIMIT:                                                    \
-        return ptr;                                                            \
-    }                                                                          \
-  }                                                                            \
-                                                                               \
-  if (card != CARD_r && validate_utf8) {                                       \
-    data = (uint64_t)dst;                                                      \
-    UPB_MUSTTAIL return fastdecode_verifyutf8(UPB_PARSE_ARGS);                 \
-  }                                                                            \
-                                                                               \
-  UPB_MUSTTAIL return fastdecode_dispatch(UPB_PARSE_ARGS);                     \
-                                                                               \
-  longstr:                                                                     \
-  if (card == CARD_r) {                                                        \
-    fastdecode_commitarr(dst + 1, &farr, sizeof(upb_StringView));              \
-  }                                                                            \
-  ptr--;                                                                       \
-  if (validate_utf8) {                                                         \
-    UPB_MUSTTAIL return fastdecode_longstring_utf8(d, ptr, msg, table,         \
-                                                   hasbits, (uint64_t)dst);    \
-  } else {                                                                     \
-    UPB_MUSTTAIL return fastdecode_longstring_noutf8(d, ptr, msg, table,       \
-                                                     hasbits, (uint64_t)dst);  \
-  }
-
-#define FASTDECODE_STRING(d, ptr, msg, table, hasbits, data, tagbytes, card,  \
-                          copyfunc, validate_utf8)                            \
-  upb_StringView* dst;                                                        \
-  fastdecode_arr farr;                                                        \
-  int64_t size;                                                               \
-                                                                              \
-  if (UPB_UNLIKELY(!fastdecode_checktag(data, tagbytes))) {                   \
-    RETURN_GENERIC("string field tag mismatch\n");                            \
-  }                                                                           \
-                                                                              \
-  if (UPB_UNLIKELY(                                                           \
-          !upb_EpsCopyInputStream_AliasingAvailable(&d->input, ptr, 0))) {    \
-    UPB_MUSTTAIL return copyfunc(UPB_PARSE_ARGS);                             \
-  }                                                                           \
-                                                                              \
-  dst = fastdecode_getfield(d, ptr, msg, &data, &hasbits, &farr,              \
-                            sizeof(upb_StringView), card);                    \
-                                                                              \
-  again:                                                                      \
-  if (card == CARD_r) {                                                       \
-    dst = fastdecode_resizearr(d, dst, &farr, sizeof(upb_StringView));        \
-  }                                                                           \
-                                                                              \
-  size = (int8_t)ptr[tagbytes];                                               \
-  ptr += tagbytes + 1;                                                        \
-                                                                              \
-  if (UPB_UNLIKELY(                                                           \
-          !upb_EpsCopyInputStream_AliasingAvailable(&d->input, ptr, size))) { \
-    ptr--;                                                                    \
-    if (validate_utf8) {                                                      \
-      return fastdecode_longstring_utf8(d, ptr, msg, table, hasbits,          \
-                                        (uint64_t)dst);                       \
-    } else {                                                                  \
-      return fastdecode_longstring_noutf8(d, ptr, msg, table, hasbits,        \
-                                          (uint64_t)dst);                     \
-    }                                                                         \
-  }                                                                           \
-                                                                              \
-  dst->data = ptr;                                                            \
-  dst->size = size;                                                           \
-  ptr = upb_EpsCopyInputStream_ReadStringAliased(&d->input, &dst->data,       \
-                                                 dst->size);                  \
-                                                                              \
-  if (card == CARD_r) {                                                       \
-    if (validate_utf8 &&                                                      \
-        !_upb_Decoder_VerifyUtf8Inline(dst->data, dst->size)) {               \
-      _upb_FastDecoder_ErrorJmp(d, kUpb_DecodeStatus_BadUtf8);                \
-    }                                                                         \
-    fastdecode_nextret ret = fastdecode_nextrepeated(                         \
-        d, dst, &ptr, &farr, data, tagbytes, sizeof(upb_StringView));         \
-    switch (ret.next) {                                                       \
-      case FD_NEXT_SAMEFIELD:                                                 \
-        dst = ret.dst;                                                        \
-        goto again;                                                           \
-      case FD_NEXT_OTHERFIELD:                                                \
-        data = ret.tag;                                                       \
-        UPB_MUSTTAIL return _upb_FastDecoder_TagDispatch(UPB_PARSE_ARGS);     \
-      case FD_NEXT_ATLIMIT:                                                   \
-        return ptr;                                                           \
-    }                                                                         \
-  }                                                                           \
-                                                                              \
-  if (card != CARD_r && validate_utf8) {                                      \
-    data = (uint64_t)dst;                                                     \
-    UPB_MUSTTAIL return fastdecode_verifyutf8(UPB_PARSE_ARGS);                \
-  }                                                                           \
-                                                                              \
-  UPB_MUSTTAIL return fastdecode_dispatch(UPB_PARSE_ARGS);
-
-/* Generate all combinations:
- * {p,c} x {s,o,r} x {s, b} x {1bt,2bt} */
-
-#define s_VALIDATE true
-#define b_VALIDATE false
-
-#define F(card, tagbytes, type)                                        \
-  UPB_NOINLINE                                                         \
-  const char* upb_c##card##type##_##tagbytes##bt(UPB_PARSE_PARAMS) {   \
-    FASTDECODE_COPYSTRING(d, ptr, msg, table, hasbits, data, tagbytes, \
-                          CARD_##card, type##_VALIDATE);               \
-  }                                                                    \
-  const char* upb_p##card##type##_##tagbytes##bt(UPB_PARSE_PARAMS) {   \
-    FASTDECODE_STRING(d, ptr, msg, table, hasbits, data, tagbytes,     \
-                      CARD_##card, upb_c##card##type##_##tagbytes##bt, \
-                      type##_VALIDATE);                                \
-  }
-
-#define UTF8(card, tagbytes) \
-  F(card, tagbytes, s)       \
-  F(card, tagbytes, b)
-
-#define TAGBYTES(card) \
-  UTF8(card, 1)        \
-  UTF8(card, 2)
-
-TAGBYTES(s)
-TAGBYTES(o)
-TAGBYTES(r)
-
-#undef s_VALIDATE
-#undef b_VALIDATE
-#undef F
-#undef TAGBYTES
-#undef FASTDECODE_LONGSTRING
-#undef FASTDECODE_COPYSTRING
-#undef FASTDECODE_STRING
-
-/* message fields *************************************************************/
-
-UPB_INLINE
-upb_Message* decode_newmsg_ceil(upb_Decoder* d, const upb_MiniTable* m,
-                                int msg_ceil_bytes) {
-  size_t size = m->UPB_PRIVATE(size);
-  char* msg_data;
-  if (UPB_LIKELY(msg_ceil_bytes > 0 &&
-                 UPB_PRIVATE(_upb_ArenaHas)(&d->arena) >= msg_ceil_bytes)) {
-    UPB_ASSERT(size <= (size_t)msg_ceil_bytes);
-    msg_data = d->arena.UPB_PRIVATE(ptr);
-    d->arena.UPB_PRIVATE(ptr) += size;
-    UPB_UNPOISON_MEMORY_REGION(msg_data, msg_ceil_bytes);
-    memset(msg_data, 0, msg_ceil_bytes);
-    UPB_POISON_MEMORY_REGION(msg_data + size, msg_ceil_bytes - size);
-  } else {
-    msg_data = (char*)upb_Arena_Malloc(&d->arena, size);
-    memset(msg_data, 0, size);
-  }
-  return (upb_Message*)msg_data;
-}
-
-typedef struct {
-  intptr_t table;
-  upb_Message* msg;
-} fastdecode_submsgdata;
-
-UPB_FORCEINLINE
-const char* fastdecode_tosubmsg(upb_EpsCopyInputStream* e, const char* ptr,
-                                void* ctx) {
-  upb_Decoder* d = (upb_Decoder*)e;
-  fastdecode_submsgdata* submsg = ctx;
-  ptr = fastdecode_dispatch(d, ptr, submsg->msg, submsg->table, 0, 0);
-  UPB_ASSUME(ptr != NULL);
-  return ptr;
-}
-
-#define FASTDECODE_SUBMSG(d, ptr, msg, table, hasbits, data, tagbytes,    \
-                          msg_ceil_bytes, card)                           \
-                                                                          \
-  if (UPB_UNLIKELY(!fastdecode_checktag(data, tagbytes))) {               \
-    RETURN_GENERIC("submessage field tag mismatch\n");                    \
-  }                                                                       \
-                                                                          \
-  if (--d->depth == 0) {                                                  \
-    _upb_FastDecoder_ErrorJmp(d, kUpb_DecodeStatus_MaxDepthExceeded);     \
-  }                                                                       \
-                                                                          \
-  upb_Message** dst;                                                      \
-  uint32_t submsg_idx = (data >> 16) & 0xff;                              \
-  const upb_MiniTable* tablep = decode_totablep(table);                   \
-  const upb_MiniTable* subtablep =                                        \
-      UPB_PRIVATE(_upb_MiniTable_GetSubTableByIndex)(tablep, submsg_idx); \
-  fastdecode_submsgdata submsg = {decode_totable(subtablep)};             \
-  fastdecode_arr farr;                                                    \
-                                                                          \
-  if (subtablep->UPB_PRIVATE(table_mask) == (uint8_t)-1) {                \
-    d->depth++;                                                           \
-    RETURN_GENERIC("submessage doesn't have fast tables.");               \
-  }                                                                       \
-                                                                          \
-  dst = fastdecode_getfield(d, ptr, msg, &data, &hasbits, &farr,          \
-                            sizeof(upb_Message*), card);                  \
-                                                                          \
-  if (card == CARD_s) {                                                   \
-    ((uint32_t*)msg)[2] |= hasbits;                                       \
-    hasbits = 0;                                                          \
-  }                                                                       \
-                                                                          \
-  again:                                                                  \
-  if (card == CARD_r) {                                                   \
-    dst = fastdecode_resizearr(d, dst, &farr, sizeof(upb_Message*));      \
-  }                                                                       \
-                                                                          \
-  submsg.msg = *dst;                                                      \
-                                                                          \
-  if (card == CARD_r || UPB_LIKELY(!submsg.msg)) {                        \
-    *dst = submsg.msg = decode_newmsg_ceil(d, subtablep, msg_ceil_bytes); \
-  }                                                                       \
-                                                                          \
-  ptr += tagbytes;                                                        \
-  ptr = fastdecode_delimited(d, ptr, fastdecode_tosubmsg, &submsg);       \
-                                                                          \
-  if (UPB_UNLIKELY(ptr == NULL || d->end_group != DECODE_NOGROUP)) {      \
-    _upb_FastDecoder_ErrorJmp(d, kUpb_DecodeStatus_Malformed);            \
-  }                                                                       \
-                                                                          \
-  if (card == CARD_r) {                                                   \
-    fastdecode_nextret ret = fastdecode_nextrepeated(                     \
-        d, dst, &ptr, &farr, data, tagbytes, sizeof(upb_Message*));       \
-    switch (ret.next) {                                                   \
-      case FD_NEXT_SAMEFIELD:                                             \
-        dst = ret.dst;                                                    \
-        goto again;                                                       \
-      case FD_NEXT_OTHERFIELD:                                            \
-        d->depth++;                                                       \
-        data = ret.tag;                                                   \
-        UPB_MUSTTAIL return _upb_FastDecoder_TagDispatch(UPB_PARSE_ARGS); \
-      case FD_NEXT_ATLIMIT:                                               \
-        d->depth++;                                                       \
-        return ptr;                                                       \
-    }                                                                     \
-  }                                                                       \
-                                                                          \
-  d->depth++;                                                             \
-  UPB_MUSTTAIL return fastdecode_dispatch(UPB_PARSE_ARGS);
-
-#define F(card, tagbytes, size_ceil, ceil_arg)                               \
-  const char* upb_p##card##m_##tagbytes##bt_max##size_ceil##b(               \
-      UPB_PARSE_PARAMS) {                                                    \
-    FASTDECODE_SUBMSG(d, ptr, msg, table, hasbits, data, tagbytes, ceil_arg, \
-                      CARD_##card);                                          \
-  }
-
-#define SIZES(card, tagbytes) \
-  F(card, tagbytes, 64, 64)   \
-  F(card, tagbytes, 128, 128) \
-  F(card, tagbytes, 192, 192) \
-  F(card, tagbytes, 256, 256) \
-  F(card, tagbytes, max, -1)
-
-#define TAGBYTES(card) \
-  SIZES(card, 1)       \
-  SIZES(card, 2)
-
-TAGBYTES(s)
-TAGBYTES(o)
-TAGBYTES(r)
-
-#undef TAGBYTES
-#undef SIZES
-#undef F
-#undef FASTDECODE_SUBMSG
-
-#endif /* UPB_FASTTABLE */
-
 
 #include <stddef.h>
 #include <stdint.h>
@@ -10026,7 +9117,7 @@ const upb_MiniTable google__protobuf__FileDescriptorSet_msg_init = {
 #endif
   UPB_FASTTABLE_INIT({
     {0x0000000000000000, &_upb_FastDecoder_DecodeGeneric},
-    {0x000800003f00000a, &upb_prm_1bt_max192b},
+    {0x000800000000000a, &upb_prm_1bt_max192b},
   })
 };
 
@@ -10041,9 +9132,9 @@ static const upb_MiniTableSubInternal google_protobuf_FileDescriptorProto__subms
   {.UPB_PRIVATE(subenum) = &google__protobuf__Edition_enum_init},
 };
 
-static const upb_MiniTableField google_protobuf_FileDescriptorProto__fields[13] = {
-  {1, UPB_SIZE(52, 16), 64, kUpb_NoSub, 12, (int)kUpb_FieldMode_Scalar | (int)kUpb_LabelFlags_IsAlternate | ((int)kUpb_FieldRep_StringView << kUpb_FieldRep_Shift)},
-  {2, UPB_SIZE(60, 32), 65, kUpb_NoSub, 12, (int)kUpb_FieldMode_Scalar | (int)kUpb_LabelFlags_IsAlternate | ((int)kUpb_FieldRep_StringView << kUpb_FieldRep_Shift)},
+static const upb_MiniTableField google_protobuf_FileDescriptorProto__fields[14] = {
+  {1, UPB_SIZE(56, 16), 64, kUpb_NoSub, 12, (int)kUpb_FieldMode_Scalar | (int)kUpb_LabelFlags_IsAlternate | ((int)kUpb_FieldRep_StringView << kUpb_FieldRep_Shift)},
+  {2, UPB_SIZE(64, 32), 65, kUpb_NoSub, 12, (int)kUpb_FieldMode_Scalar | (int)kUpb_LabelFlags_IsAlternate | ((int)kUpb_FieldRep_StringView << kUpb_FieldRep_Shift)},
   {3, UPB_SIZE(12, 64), 0, kUpb_NoSub, 12, (int)kUpb_FieldMode_Array | (int)kUpb_LabelFlags_IsAlternate | ((int)UPB_SIZE(kUpb_FieldRep_4Byte, kUpb_FieldRep_8Byte) << kUpb_FieldRep_Shift)},
   {4, UPB_SIZE(16, 72), 0, 0, 11, (int)kUpb_FieldMode_Array | ((int)UPB_SIZE(kUpb_FieldRep_4Byte, kUpb_FieldRep_8Byte) << kUpb_FieldRep_Shift)},
   {5, UPB_SIZE(20, 80), 0, 1, 11, (int)kUpb_FieldMode_Array | ((int)UPB_SIZE(kUpb_FieldRep_4Byte, kUpb_FieldRep_8Byte) << kUpb_FieldRep_Shift)},
@@ -10053,14 +9144,15 @@ static const upb_MiniTableField google_protobuf_FileDescriptorProto__fields[13] 
   {9, UPB_SIZE(36, 112), 67, 5, 11, (int)kUpb_FieldMode_Scalar | ((int)UPB_SIZE(kUpb_FieldRep_4Byte, kUpb_FieldRep_8Byte) << kUpb_FieldRep_Shift)},
   {10, UPB_SIZE(40, 120), 0, kUpb_NoSub, 5, (int)kUpb_FieldMode_Array | ((int)UPB_SIZE(kUpb_FieldRep_4Byte, kUpb_FieldRep_8Byte) << kUpb_FieldRep_Shift)},
   {11, UPB_SIZE(44, 128), 0, kUpb_NoSub, 5, (int)kUpb_FieldMode_Array | ((int)UPB_SIZE(kUpb_FieldRep_4Byte, kUpb_FieldRep_8Byte) << kUpb_FieldRep_Shift)},
-  {12, UPB_SIZE(68, 48), 68, kUpb_NoSub, 12, (int)kUpb_FieldMode_Scalar | (int)kUpb_LabelFlags_IsAlternate | ((int)kUpb_FieldRep_StringView << kUpb_FieldRep_Shift)},
+  {12, UPB_SIZE(72, 48), 68, kUpb_NoSub, 12, (int)kUpb_FieldMode_Scalar | (int)kUpb_LabelFlags_IsAlternate | ((int)kUpb_FieldRep_StringView << kUpb_FieldRep_Shift)},
   {14, UPB_SIZE(48, 12), 69, 6, 14, (int)kUpb_FieldMode_Scalar | ((int)kUpb_FieldRep_4Byte << kUpb_FieldRep_Shift)},
+  {15, UPB_SIZE(52, 136), 0, kUpb_NoSub, 12, (int)kUpb_FieldMode_Array | (int)kUpb_LabelFlags_IsAlternate | ((int)UPB_SIZE(kUpb_FieldRep_4Byte, kUpb_FieldRep_8Byte) << kUpb_FieldRep_Shift)},
 };
 
 const upb_MiniTable google__protobuf__FileDescriptorProto_msg_init = {
   &google_protobuf_FileDescriptorProto__submsgs[0],
   &google_protobuf_FileDescriptorProto__fields[0],
-  UPB_SIZE(80, 136), 13, kUpb_ExtMode_NonExtendable, 12, UPB_FASTTABLE_MASK(120), 0,
+  UPB_SIZE(80, 144), 14, kUpb_ExtMode_NonExtendable, 12, UPB_FASTTABLE_MASK(120), 0,
 #ifdef UPB_TRACING_ENABLED
   "google.protobuf.FileDescriptorProto",
 #endif
@@ -10068,24 +9160,24 @@ const upb_MiniTable google__protobuf__FileDescriptorProto_msg_init = {
     {0x0000000000000000, &_upb_FastDecoder_DecodeGeneric},
     {0x0000000000000000, &_upb_FastDecoder_DecodeGeneric},
     {0x0000000000000000, &_upb_FastDecoder_DecodeGeneric},
-    {0x004000003f00001a, &upb_prs_1bt},
-    {0x004800003f000022, &upb_prm_1bt_max128b},
-    {0x005000003f01002a, &upb_prm_1bt_max128b},
-    {0x005800003f020032, &upb_prm_1bt_max64b},
-    {0x006000003f03003a, &upb_prm_1bt_max128b},
+    {0x004000000000001a, &upb_prs_1bt},
+    {0x0048000000000022, &upb_prm_1bt_max128b},
+    {0x005000000001002a, &upb_prm_1bt_max128b},
+    {0x0058000000020032, &upb_prm_1bt_max64b},
+    {0x006000000003003a, &upb_prm_1bt_max128b},
     {0x0000000000000000, &_upb_FastDecoder_DecodeGeneric},
     {0x0000000000000000, &_upb_FastDecoder_DecodeGeneric},
-    {0x007800003f000050, &upb_prv4_1bt},
-    {0x008000003f000058, &upb_prv4_1bt},
+    {0x0078000000000050, &upb_prv4_1bt},
+    {0x0080000000000058, &upb_prv4_1bt},
     {0x0000000000000000, &_upb_FastDecoder_DecodeGeneric},
     {0x0000000000000000, &_upb_FastDecoder_DecodeGeneric},
     {0x0000000000000000, &_upb_FastDecoder_DecodeGeneric},
-    {0x0000000000000000, &_upb_FastDecoder_DecodeGeneric},
+    {0x008800000000007a, &upb_prs_1bt},
   })
 };
 
 const upb_MiniTable* google__protobuf__FileDescriptorProto_msg_init_ptr = &google__protobuf__FileDescriptorProto_msg_init;
-static const upb_MiniTableSubInternal google_protobuf_DescriptorProto__submsgs[8] = {
+static const upb_MiniTableSubInternal google_protobuf_DescriptorProto__submsgs[9] = {
   {.UPB_PRIVATE(submsg) = &google__protobuf__FieldDescriptorProto_msg_init_ptr},
   {.UPB_PRIVATE(submsg) = &google__protobuf__DescriptorProto_msg_init_ptr},
   {.UPB_PRIVATE(submsg) = &google__protobuf__EnumDescriptorProto_msg_init_ptr},
@@ -10094,10 +9186,11 @@ static const upb_MiniTableSubInternal google_protobuf_DescriptorProto__submsgs[8
   {.UPB_PRIVATE(submsg) = &google__protobuf__MessageOptions_msg_init_ptr},
   {.UPB_PRIVATE(submsg) = &google__protobuf__OneofDescriptorProto_msg_init_ptr},
   {.UPB_PRIVATE(submsg) = &google__protobuf__DescriptorProto__ReservedRange_msg_init_ptr},
+  {.UPB_PRIVATE(subenum) = &google__protobuf__SymbolVisibility_enum_init},
 };
 
-static const upb_MiniTableField google_protobuf_DescriptorProto__fields[10] = {
-  {1, UPB_SIZE(48, 16), 64, kUpb_NoSub, 12, (int)kUpb_FieldMode_Scalar | (int)kUpb_LabelFlags_IsAlternate | ((int)kUpb_FieldRep_StringView << kUpb_FieldRep_Shift)},
+static const upb_MiniTableField google_protobuf_DescriptorProto__fields[11] = {
+  {1, UPB_SIZE(52, 16), 64, kUpb_NoSub, 12, (int)kUpb_FieldMode_Scalar | (int)kUpb_LabelFlags_IsAlternate | ((int)kUpb_FieldRep_StringView << kUpb_FieldRep_Shift)},
   {2, UPB_SIZE(12, 32), 0, 0, 11, (int)kUpb_FieldMode_Array | ((int)UPB_SIZE(kUpb_FieldRep_4Byte, kUpb_FieldRep_8Byte) << kUpb_FieldRep_Shift)},
   {3, UPB_SIZE(16, 40), 0, 1, 11, (int)kUpb_FieldMode_Array | ((int)UPB_SIZE(kUpb_FieldRep_4Byte, kUpb_FieldRep_8Byte) << kUpb_FieldRep_Shift)},
   {4, UPB_SIZE(20, 48), 0, 2, 11, (int)kUpb_FieldMode_Array | ((int)UPB_SIZE(kUpb_FieldRep_4Byte, kUpb_FieldRep_8Byte) << kUpb_FieldRep_Shift)},
@@ -10107,27 +9200,28 @@ static const upb_MiniTableField google_protobuf_DescriptorProto__fields[10] = {
   {8, UPB_SIZE(36, 80), 0, 6, 11, (int)kUpb_FieldMode_Array | ((int)UPB_SIZE(kUpb_FieldRep_4Byte, kUpb_FieldRep_8Byte) << kUpb_FieldRep_Shift)},
   {9, UPB_SIZE(40, 88), 0, 7, 11, (int)kUpb_FieldMode_Array | ((int)UPB_SIZE(kUpb_FieldRep_4Byte, kUpb_FieldRep_8Byte) << kUpb_FieldRep_Shift)},
   {10, UPB_SIZE(44, 96), 0, kUpb_NoSub, 12, (int)kUpb_FieldMode_Array | (int)kUpb_LabelFlags_IsAlternate | ((int)UPB_SIZE(kUpb_FieldRep_4Byte, kUpb_FieldRep_8Byte) << kUpb_FieldRep_Shift)},
+  {11, UPB_SIZE(48, 12), 66, 8, 14, (int)kUpb_FieldMode_Scalar | ((int)kUpb_FieldRep_4Byte << kUpb_FieldRep_Shift)},
 };
 
 const upb_MiniTable google__protobuf__DescriptorProto_msg_init = {
   &google_protobuf_DescriptorProto__submsgs[0],
   &google_protobuf_DescriptorProto__fields[0],
-  UPB_SIZE(56, 104), 10, kUpb_ExtMode_NonExtendable, 10, UPB_FASTTABLE_MASK(120), 0,
+  UPB_SIZE(64, 104), 11, kUpb_ExtMode_NonExtendable, 11, UPB_FASTTABLE_MASK(120), 0,
 #ifdef UPB_TRACING_ENABLED
   "google.protobuf.DescriptorProto",
 #endif
   UPB_FASTTABLE_INIT({
     {0x0000000000000000, &_upb_FastDecoder_DecodeGeneric},
     {0x0000000000000000, &_upb_FastDecoder_DecodeGeneric},
-    {0x002000003f000012, &upb_prm_1bt_max128b},
-    {0x002800003f01001a, &upb_prm_1bt_max128b},
-    {0x003000003f020022, &upb_prm_1bt_max128b},
-    {0x003800003f03002a, &upb_prm_1bt_max64b},
-    {0x004000003f040032, &upb_prm_1bt_max128b},
+    {0x0020000000000012, &upb_prm_1bt_max128b},
+    {0x002800000001001a, &upb_prm_1bt_max128b},
+    {0x0030000000020022, &upb_prm_1bt_max128b},
+    {0x003800000003002a, &upb_prm_1bt_max64b},
+    {0x0040000000040032, &upb_prm_1bt_max128b},
     {0x0000000000000000, &_upb_FastDecoder_DecodeGeneric},
-    {0x005000003f060042, &upb_prm_1bt_max64b},
-    {0x005800003f07004a, &upb_prm_1bt_max64b},
-    {0x006000003f000052, &upb_prs_1bt},
+    {0x0050000000060042, &upb_prm_1bt_max64b},
+    {0x005800000007004a, &upb_prm_1bt_max64b},
+    {0x0060000000000052, &upb_prs_1bt},
     {0x0000000000000000, &_upb_FastDecoder_DecodeGeneric},
     {0x0000000000000000, &_upb_FastDecoder_DecodeGeneric},
     {0x0000000000000000, &_upb_FastDecoder_DecodeGeneric},
@@ -10196,7 +9290,7 @@ const upb_MiniTable google__protobuf__ExtensionRangeOptions_msg_init = {
   UPB_FASTTABLE_INIT({
     {0x0000000000000000, &_upb_FastDecoder_DecodeGeneric},
     {0x0000000000000000, &_upb_FastDecoder_DecodeGeneric},
-    {0x001000003f000012, &upb_prm_1bt_max64b},
+    {0x0010000000000012, &upb_prm_1bt_max64b},
     {0x0000000000000000, &_upb_FastDecoder_DecodeGeneric},
     {0x0000000000000000, &_upb_FastDecoder_DecodeGeneric},
     {0x0000000000000000, &_upb_FastDecoder_DecodeGeneric},
@@ -10217,7 +9311,7 @@ const upb_MiniTable google__protobuf__ExtensionRangeOptions_msg_init = {
     {0x0000000000000000, &_upb_FastDecoder_DecodeGeneric},
     {0x0000000000000000, &_upb_FastDecoder_DecodeGeneric},
     {0x0000000000000000, &_upb_FastDecoder_DecodeGeneric},
-    {0x002000003f023eba, &upb_prm_2bt_max128b},
+    {0x0020000000023eba, &upb_prm_2bt_max128b},
     {0x0000000000000000, &_upb_FastDecoder_DecodeGeneric},
     {0x0000000000000000, &_upb_FastDecoder_DecodeGeneric},
     {0x0000000000000000, &_upb_FastDecoder_DecodeGeneric},
@@ -10297,34 +9391,36 @@ const upb_MiniTable google__protobuf__OneofDescriptorProto_msg_init = {
 };
 
 const upb_MiniTable* google__protobuf__OneofDescriptorProto_msg_init_ptr = &google__protobuf__OneofDescriptorProto_msg_init;
-static const upb_MiniTableSubInternal google_protobuf_EnumDescriptorProto__submsgs[3] = {
+static const upb_MiniTableSubInternal google_protobuf_EnumDescriptorProto__submsgs[4] = {
   {.UPB_PRIVATE(submsg) = &google__protobuf__EnumValueDescriptorProto_msg_init_ptr},
   {.UPB_PRIVATE(submsg) = &google__protobuf__EnumOptions_msg_init_ptr},
   {.UPB_PRIVATE(submsg) = &google__protobuf__EnumDescriptorProto__EnumReservedRange_msg_init_ptr},
+  {.UPB_PRIVATE(subenum) = &google__protobuf__SymbolVisibility_enum_init},
 };
 
-static const upb_MiniTableField google_protobuf_EnumDescriptorProto__fields[5] = {
-  {1, UPB_SIZE(28, 16), 64, kUpb_NoSub, 12, (int)kUpb_FieldMode_Scalar | (int)kUpb_LabelFlags_IsAlternate | ((int)kUpb_FieldRep_StringView << kUpb_FieldRep_Shift)},
+static const upb_MiniTableField google_protobuf_EnumDescriptorProto__fields[6] = {
+  {1, UPB_SIZE(32, 16), 64, kUpb_NoSub, 12, (int)kUpb_FieldMode_Scalar | (int)kUpb_LabelFlags_IsAlternate | ((int)kUpb_FieldRep_StringView << kUpb_FieldRep_Shift)},
   {2, UPB_SIZE(12, 32), 0, 0, 11, (int)kUpb_FieldMode_Array | ((int)UPB_SIZE(kUpb_FieldRep_4Byte, kUpb_FieldRep_8Byte) << kUpb_FieldRep_Shift)},
   {3, UPB_SIZE(16, 40), 65, 1, 11, (int)kUpb_FieldMode_Scalar | ((int)UPB_SIZE(kUpb_FieldRep_4Byte, kUpb_FieldRep_8Byte) << kUpb_FieldRep_Shift)},
   {4, UPB_SIZE(20, 48), 0, 2, 11, (int)kUpb_FieldMode_Array | ((int)UPB_SIZE(kUpb_FieldRep_4Byte, kUpb_FieldRep_8Byte) << kUpb_FieldRep_Shift)},
   {5, UPB_SIZE(24, 56), 0, kUpb_NoSub, 12, (int)kUpb_FieldMode_Array | (int)kUpb_LabelFlags_IsAlternate | ((int)UPB_SIZE(kUpb_FieldRep_4Byte, kUpb_FieldRep_8Byte) << kUpb_FieldRep_Shift)},
+  {6, UPB_SIZE(28, 12), 66, 3, 14, (int)kUpb_FieldMode_Scalar | ((int)kUpb_FieldRep_4Byte << kUpb_FieldRep_Shift)},
 };
 
 const upb_MiniTable google__protobuf__EnumDescriptorProto_msg_init = {
   &google_protobuf_EnumDescriptorProto__submsgs[0],
   &google_protobuf_EnumDescriptorProto__fields[0],
-  UPB_SIZE(40, 64), 5, kUpb_ExtMode_NonExtendable, 5, UPB_FASTTABLE_MASK(56), 0,
+  UPB_SIZE(40, 64), 6, kUpb_ExtMode_NonExtendable, 6, UPB_FASTTABLE_MASK(56), 0,
 #ifdef UPB_TRACING_ENABLED
   "google.protobuf.EnumDescriptorProto",
 #endif
   UPB_FASTTABLE_INIT({
     {0x0000000000000000, &_upb_FastDecoder_DecodeGeneric},
     {0x0000000000000000, &_upb_FastDecoder_DecodeGeneric},
-    {0x002000003f000012, &upb_prm_1bt_max64b},
+    {0x0020000000000012, &upb_prm_1bt_max64b},
     {0x0000000000000000, &_upb_FastDecoder_DecodeGeneric},
-    {0x003000003f020022, &upb_prm_1bt_max64b},
-    {0x003800003f00002a, &upb_prs_1bt},
+    {0x0030000000020022, &upb_prm_1bt_max64b},
+    {0x003800000000002a, &upb_prs_1bt},
     {0x0000000000000000, &_upb_FastDecoder_DecodeGeneric},
     {0x0000000000000000, &_upb_FastDecoder_DecodeGeneric},
   })
@@ -10387,7 +9483,7 @@ const upb_MiniTable google__protobuf__ServiceDescriptorProto_msg_init = {
   UPB_FASTTABLE_INIT({
     {0x0000000000000000, &_upb_FastDecoder_DecodeGeneric},
     {0x0000000000000000, &_upb_FastDecoder_DecodeGeneric},
-    {0x002000003f000012, &upb_prm_1bt_max128b},
+    {0x0020000000000012, &upb_prm_1bt_max128b},
     {0x0000000000000000, &_upb_FastDecoder_DecodeGeneric},
   })
 };
@@ -10477,7 +9573,7 @@ const upb_MiniTable google__protobuf__FileOptions_msg_init = {
     {0x0000000000000000, &_upb_FastDecoder_DecodeGeneric},
     {0x0000000000000000, &_upb_FastDecoder_DecodeGeneric},
     {0x0000000000000000, &_upb_FastDecoder_DecodeGeneric},
-    {0x00c000003f013eba, &upb_prm_2bt_max128b},
+    {0x00c0000000013eba, &upb_prm_2bt_max128b},
     {0x0000000000000000, &_upb_FastDecoder_DecodeGeneric},
     {0x0000000000000000, &_upb_FastDecoder_DecodeGeneric},
     {0x0000000000000000, &_upb_FastDecoder_DecodeGeneric},
@@ -10536,7 +9632,7 @@ const upb_MiniTable google__protobuf__MessageOptions_msg_init = {
     {0x0000000000000000, &_upb_FastDecoder_DecodeGeneric},
     {0x0000000000000000, &_upb_FastDecoder_DecodeGeneric},
     {0x0000000000000000, &_upb_FastDecoder_DecodeGeneric},
-    {0x001800003f013eba, &upb_prm_2bt_max128b},
+    {0x0018000000013eba, &upb_prm_2bt_max128b},
     {0x0000000000000000, &_upb_FastDecoder_DecodeGeneric},
     {0x0000000000000000, &_upb_FastDecoder_DecodeGeneric},
     {0x0000000000000000, &_upb_FastDecoder_DecodeGeneric},
@@ -10605,10 +9701,10 @@ const upb_MiniTable google__protobuf__FieldOptions_msg_init = {
     {0x0000000000000000, &_upb_FastDecoder_DecodeGeneric},
     {0x0000000000000000, &_upb_FastDecoder_DecodeGeneric},
     {0x0000000000000000, &_upb_FastDecoder_DecodeGeneric},
-    {0x002800003f0001a2, &upb_prm_2bt_max64b},
+    {0x00280000000001a2, &upb_prm_2bt_max64b},
     {0x0000000000000000, &_upb_FastDecoder_DecodeGeneric},
     {0x0000000000000000, &_upb_FastDecoder_DecodeGeneric},
-    {0x004000003f033eba, &upb_prm_2bt_max128b},
+    {0x0040000000033eba, &upb_prm_2bt_max128b},
     {0x0000000000000000, &_upb_FastDecoder_DecodeGeneric},
     {0x0000000000000000, &_upb_FastDecoder_DecodeGeneric},
     {0x0000000000000000, &_upb_FastDecoder_DecodeGeneric},
@@ -10704,7 +9800,7 @@ const upb_MiniTable google__protobuf__OneofOptions_msg_init = {
     {0x0000000000000000, &_upb_FastDecoder_DecodeGeneric},
     {0x0000000000000000, &_upb_FastDecoder_DecodeGeneric},
     {0x0000000000000000, &_upb_FastDecoder_DecodeGeneric},
-    {0x001800003f013eba, &upb_prm_2bt_max128b},
+    {0x0018000000013eba, &upb_prm_2bt_max128b},
     {0x0000000000000000, &_upb_FastDecoder_DecodeGeneric},
     {0x0000000000000000, &_upb_FastDecoder_DecodeGeneric},
     {0x0000000000000000, &_upb_FastDecoder_DecodeGeneric},
@@ -10761,7 +9857,7 @@ const upb_MiniTable google__protobuf__EnumOptions_msg_init = {
     {0x0000000000000000, &_upb_FastDecoder_DecodeGeneric},
     {0x0000000000000000, &_upb_FastDecoder_DecodeGeneric},
     {0x0000000000000000, &_upb_FastDecoder_DecodeGeneric},
-    {0x001800003f013eba, &upb_prm_2bt_max128b},
+    {0x0018000000013eba, &upb_prm_2bt_max128b},
     {0x0000000000000000, &_upb_FastDecoder_DecodeGeneric},
     {0x0000000000000000, &_upb_FastDecoder_DecodeGeneric},
     {0x0000000000000000, &_upb_FastDecoder_DecodeGeneric},
@@ -10819,7 +9915,7 @@ const upb_MiniTable google__protobuf__EnumValueOptions_msg_init = {
     {0x0000000000000000, &_upb_FastDecoder_DecodeGeneric},
     {0x0000000000000000, &_upb_FastDecoder_DecodeGeneric},
     {0x0000000000000000, &_upb_FastDecoder_DecodeGeneric},
-    {0x002000003f023eba, &upb_prm_2bt_max128b},
+    {0x0020000000023eba, &upb_prm_2bt_max128b},
     {0x0000000000000000, &_upb_FastDecoder_DecodeGeneric},
     {0x0000000000000000, &_upb_FastDecoder_DecodeGeneric},
     {0x0000000000000000, &_upb_FastDecoder_DecodeGeneric},
@@ -10874,7 +9970,7 @@ const upb_MiniTable google__protobuf__ServiceOptions_msg_init = {
     {0x0000000000000000, &_upb_FastDecoder_DecodeGeneric},
     {0x0000000000000000, &_upb_FastDecoder_DecodeGeneric},
     {0x0000000000000000, &_upb_FastDecoder_DecodeGeneric},
-    {0x001800003f013eba, &upb_prm_2bt_max128b},
+    {0x0018000000013eba, &upb_prm_2bt_max128b},
     {0x0000000000000000, &_upb_FastDecoder_DecodeGeneric},
     {0x0000000000000000, &_upb_FastDecoder_DecodeGeneric},
     {0x0000000000000000, &_upb_FastDecoder_DecodeGeneric},
@@ -10931,7 +10027,7 @@ const upb_MiniTable google__protobuf__MethodOptions_msg_init = {
     {0x0000000000000000, &_upb_FastDecoder_DecodeGeneric},
     {0x0000000000000000, &_upb_FastDecoder_DecodeGeneric},
     {0x0000000000000000, &_upb_FastDecoder_DecodeGeneric},
-    {0x001800003f013eba, &upb_prm_2bt_max128b},
+    {0x0018000000013eba, &upb_prm_2bt_max128b},
     {0x0000000000000000, &_upb_FastDecoder_DecodeGeneric},
     {0x0000000000000000, &_upb_FastDecoder_DecodeGeneric},
     {0x0000000000000000, &_upb_FastDecoder_DecodeGeneric},
@@ -10968,7 +10064,7 @@ const upb_MiniTable google__protobuf__UninterpretedOption_msg_init = {
   UPB_FASTTABLE_INIT({
     {0x0000000000000000, &_upb_FastDecoder_DecodeGeneric},
     {0x0000000000000000, &_upb_FastDecoder_DecodeGeneric},
-    {0x004000003f000012, &upb_prm_1bt_max64b},
+    {0x0040000000000012, &upb_prm_1bt_max64b},
     {0x0000000000000000, &_upb_FastDecoder_DecodeGeneric},
   })
 };
@@ -10989,7 +10085,7 @@ const upb_MiniTable google__protobuf__UninterpretedOption__NamePart_msg_init = {
 };
 
 const upb_MiniTable* google__protobuf__UninterpretedOption__NamePart_msg_init_ptr = &google__protobuf__UninterpretedOption__NamePart_msg_init;
-static const upb_MiniTableSubInternal google_protobuf_FeatureSet__submsgs[7] = {
+static const upb_MiniTableSubInternal google_protobuf_FeatureSet__submsgs[8] = {
   {.UPB_PRIVATE(subenum) = &google__protobuf__FeatureSet__FieldPresence_enum_init},
   {.UPB_PRIVATE(subenum) = &google__protobuf__FeatureSet__EnumType_enum_init},
   {.UPB_PRIVATE(subenum) = &google__protobuf__FeatureSet__RepeatedFieldEncoding_enum_init},
@@ -10997,9 +10093,10 @@ static const upb_MiniTableSubInternal google_protobuf_FeatureSet__submsgs[7] = {
   {.UPB_PRIVATE(subenum) = &google__protobuf__FeatureSet__MessageEncoding_enum_init},
   {.UPB_PRIVATE(subenum) = &google__protobuf__FeatureSet__JsonFormat_enum_init},
   {.UPB_PRIVATE(subenum) = &google__protobuf__FeatureSet__EnforceNamingStyle_enum_init},
+  {.UPB_PRIVATE(subenum) = &google__protobuf__FeatureSet__VisibilityFeature__DefaultSymbolVisibility_enum_init},
 };
 
-static const upb_MiniTableField google_protobuf_FeatureSet__fields[7] = {
+static const upb_MiniTableField google_protobuf_FeatureSet__fields[8] = {
   {1, 12, 64, 0, 14, (int)kUpb_FieldMode_Scalar | ((int)kUpb_FieldRep_4Byte << kUpb_FieldRep_Shift)},
   {2, 16, 65, 1, 14, (int)kUpb_FieldMode_Scalar | ((int)kUpb_FieldRep_4Byte << kUpb_FieldRep_Shift)},
   {3, 20, 66, 2, 14, (int)kUpb_FieldMode_Scalar | ((int)kUpb_FieldRep_4Byte << kUpb_FieldRep_Shift)},
@@ -11007,18 +10104,29 @@ static const upb_MiniTableField google_protobuf_FeatureSet__fields[7] = {
   {5, 28, 68, 4, 14, (int)kUpb_FieldMode_Scalar | ((int)kUpb_FieldRep_4Byte << kUpb_FieldRep_Shift)},
   {6, 32, 69, 5, 14, (int)kUpb_FieldMode_Scalar | ((int)kUpb_FieldRep_4Byte << kUpb_FieldRep_Shift)},
   {7, 36, 70, 6, 14, (int)kUpb_FieldMode_Scalar | ((int)kUpb_FieldRep_4Byte << kUpb_FieldRep_Shift)},
+  {8, 40, 71, 7, 14, (int)kUpb_FieldMode_Scalar | ((int)kUpb_FieldRep_4Byte << kUpb_FieldRep_Shift)},
 };
 
 const upb_MiniTable google__protobuf__FeatureSet_msg_init = {
   &google_protobuf_FeatureSet__submsgs[0],
   &google_protobuf_FeatureSet__fields[0],
-  40, 7, kUpb_ExtMode_Extendable, 7, UPB_FASTTABLE_MASK(255), 0,
+  48, 8, kUpb_ExtMode_Extendable, 8, UPB_FASTTABLE_MASK(255), 0,
 #ifdef UPB_TRACING_ENABLED
   "google.protobuf.FeatureSet",
 #endif
 };
 
 const upb_MiniTable* google__protobuf__FeatureSet_msg_init_ptr = &google__protobuf__FeatureSet_msg_init;
+const upb_MiniTable google__protobuf__FeatureSet__VisibilityFeature_msg_init = {
+  NULL,
+  NULL,
+  8, 0, kUpb_ExtMode_NonExtendable, 0, UPB_FASTTABLE_MASK(255), 0,
+#ifdef UPB_TRACING_ENABLED
+  "google.protobuf.FeatureSet.VisibilityFeature",
+#endif
+};
+
+const upb_MiniTable* google__protobuf__FeatureSet__VisibilityFeature_msg_init_ptr = &google__protobuf__FeatureSet__VisibilityFeature_msg_init;
 static const upb_MiniTableSubInternal google_protobuf_FeatureSetDefaults__submsgs[3] = {
   {.UPB_PRIVATE(submsg) = &google__protobuf__FeatureSetDefaults__FeatureSetEditionDefault_msg_init_ptr},
   {.UPB_PRIVATE(subenum) = &google__protobuf__Edition_enum_init},
@@ -11040,7 +10148,7 @@ const upb_MiniTable google__protobuf__FeatureSetDefaults_msg_init = {
 #endif
   UPB_FASTTABLE_INIT({
     {0x0000000000000000, &_upb_FastDecoder_DecodeGeneric},
-    {0x001800003f00000a, &upb_prm_1bt_max64b},
+    {0x001800000000000a, &upb_prm_1bt_max64b},
   })
 };
 
@@ -11084,7 +10192,7 @@ const upb_MiniTable google__protobuf__SourceCodeInfo_msg_init = {
 #endif
   UPB_FASTTABLE_INIT({
     {0x0000000000000000, &_upb_FastDecoder_DecodeGeneric},
-    {0x000800003f00000a, &upb_prm_1bt_max128b},
+    {0x000800000000000a, &upb_prm_1bt_max128b},
   })
 };
 
@@ -11106,12 +10214,12 @@ const upb_MiniTable google__protobuf__SourceCodeInfo__Location_msg_init = {
 #endif
   UPB_FASTTABLE_INIT({
     {0x0000000000000000, &_upb_FastDecoder_DecodeGeneric},
-    {0x003000003f00000a, &upb_ppv4_1bt},
-    {0x003800003f000012, &upb_ppv4_1bt},
+    {0x003000000000000a, &upb_ppv4_1bt},
+    {0x0038000000000012, &upb_ppv4_1bt},
     {0x0000000000000000, &_upb_FastDecoder_DecodeGeneric},
     {0x0000000000000000, &_upb_FastDecoder_DecodeGeneric},
     {0x0000000000000000, &_upb_FastDecoder_DecodeGeneric},
-    {0x004000003f000032, &upb_prs_1bt},
+    {0x0040000000000032, &upb_prs_1bt},
     {0x0000000000000000, &_upb_FastDecoder_DecodeGeneric},
   })
 };
@@ -11134,7 +10242,7 @@ const upb_MiniTable google__protobuf__GeneratedCodeInfo_msg_init = {
 #endif
   UPB_FASTTABLE_INIT({
     {0x0000000000000000, &_upb_FastDecoder_DecodeGeneric},
-    {0x000800003f00000a, &upb_prm_1bt_max64b},
+    {0x000800000000000a, &upb_prm_1bt_max64b},
   })
 };
 
@@ -11160,7 +10268,7 @@ const upb_MiniTable google__protobuf__GeneratedCodeInfo__Annotation_msg_init = {
 #endif
   UPB_FASTTABLE_INIT({
     {0x0000000000000000, &_upb_FastDecoder_DecodeGeneric},
-    {0x002800003f00000a, &upb_ppv4_1bt},
+    {0x002800000000000a, &upb_ppv4_1bt},
   })
 };
 
@@ -11255,6 +10363,15 @@ const upb_MiniTableEnum google__protobuf__FeatureSet__Utf8Validation_enum_init =
     },
 };
 
+const upb_MiniTableEnum google__protobuf__FeatureSet__VisibilityFeature__DefaultSymbolVisibility_enum_init = {
+    64,
+    0,
+    {
+        0x1f,
+        0x0,
+    },
+};
+
 const upb_MiniTableEnum google__protobuf__FieldDescriptorProto__Label_enum_init = {
     64,
     0,
@@ -11336,7 +10453,16 @@ const upb_MiniTableEnum google__protobuf__MethodOptions__IdempotencyLevel_enum_i
     },
 };
 
-static const upb_MiniTable *messages_layout[33] = {
+const upb_MiniTableEnum google__protobuf__SymbolVisibility_enum_init = {
+    64,
+    0,
+    {
+        0x7,
+        0x0,
+    },
+};
+
+static const upb_MiniTable *messages_layout[34] = {
   &google__protobuf__FileDescriptorSet_msg_init,
   &google__protobuf__FileDescriptorProto_msg_init,
   &google__protobuf__DescriptorProto_msg_init,
@@ -11364,6 +10490,7 @@ static const upb_MiniTable *messages_layout[33] = {
   &google__protobuf__UninterpretedOption_msg_init,
   &google__protobuf__UninterpretedOption__NamePart_msg_init,
   &google__protobuf__FeatureSet_msg_init,
+  &google__protobuf__FeatureSet__VisibilityFeature_msg_init,
   &google__protobuf__FeatureSetDefaults_msg_init,
   &google__protobuf__FeatureSetDefaults__FeatureSetEditionDefault_msg_init,
   &google__protobuf__SourceCodeInfo_msg_init,
@@ -11372,7 +10499,7 @@ static const upb_MiniTable *messages_layout[33] = {
   &google__protobuf__GeneratedCodeInfo__Annotation_msg_init,
 };
 
-static const upb_MiniTableEnum *enums_layout[18] = {
+static const upb_MiniTableEnum *enums_layout[20] = {
   &google__protobuf__Edition_enum_init,
   &google__protobuf__ExtensionRangeOptions__VerificationState_enum_init,
   &google__protobuf__FeatureSet__EnforceNamingStyle_enum_init,
@@ -11382,6 +10509,7 @@ static const upb_MiniTableEnum *enums_layout[18] = {
   &google__protobuf__FeatureSet__MessageEncoding_enum_init,
   &google__protobuf__FeatureSet__RepeatedFieldEncoding_enum_init,
   &google__protobuf__FeatureSet__Utf8Validation_enum_init,
+  &google__protobuf__FeatureSet__VisibilityFeature__DefaultSymbolVisibility_enum_init,
   &google__protobuf__FieldDescriptorProto__Label_enum_init,
   &google__protobuf__FieldDescriptorProto__Type_enum_init,
   &google__protobuf__FieldOptions__CType_enum_init,
@@ -11391,14 +10519,15 @@ static const upb_MiniTableEnum *enums_layout[18] = {
   &google__protobuf__FileOptions__OptimizeMode_enum_init,
   &google__protobuf__GeneratedCodeInfo__Annotation__Semantic_enum_init,
   &google__protobuf__MethodOptions__IdempotencyLevel_enum_init,
+  &google__protobuf__SymbolVisibility_enum_init,
 };
 
 const upb_MiniTableFile google_protobuf_descriptor_proto_upb_file_layout = {
   messages_layout,
   enums_layout,
   NULL,
-  33,
-  18,
+  34,
+  20,
   0,
 };
 
@@ -18190,3 +17319,7 @@ google_protobuf_ServiceDescriptorProto* upb_ServiceDef_ToProto(const upb_Service
 #undef UPB_LINKARR_START
 #undef UPB_LINKARR_STOP
 #undef UPB_FUTURE_BREAKING_CHANGES
+#undef UPB_HAS_ATTRIBUTE
+#undef UPB_HAS_BUILTIN
+#undef UPB_HAS_EXTENSION
+#undef UPB_HAS_FEATURE

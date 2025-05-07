@@ -8,10 +8,7 @@
 load("@bazel_skylib//rules:common_settings.bzl", "bool_flag")
 load("@rules_python//python:defs.bzl", "py_binary")
 load("//bazel/private:upb_proto_library_internal/copts.bzl", "upb_proto_library_copts")
-load(
-    "//upb/bazel:amalgamation.bzl",
-    "upb_amalgamation",
-)
+load("//upb/bazel:amalgamation.bzl", "upb_amalgamation")
 load("//upb/bazel:build_defs.bzl", "UPB_DEFAULT_COPTS")
 
 package(default_applicable_licenses = ["//:license"])
@@ -30,25 +27,23 @@ exports_files(
 config_setting(
     name = "windows",
     constraint_values = ["@platforms//os:windows"],
-    visibility = ["//visibility:public"],
 )
 
 bool_flag(
     name = "fasttable_enabled",
     build_setting_default = False,
-    visibility = ["//visibility:public"],
+    visibility = ["//bazel:__pkg__"],
 )
 
 config_setting(
     name = "fasttable_enabled_setting",
     flag_values = {"//upb:fasttable_enabled": "true"},
-    visibility = ["//visibility:public"],
 )
 
 upb_proto_library_copts(
-    name = "upb_proto_library_copts__for_generated_code_only_do_not_use",
+    name = "upb_proto_library_copts",
     copts = UPB_DEFAULT_COPTS,
-    visibility = ["//visibility:public"],
+    visibility = ["//bazel:__pkg__"],
 )
 
 # Please update copy.bara.sky target = ":friends" if
@@ -89,7 +84,12 @@ cc_library(
         ":mini_table",
         ":wire",
         "//upb/message:internal",
-    ],
+    ] + select({
+        ":fasttable_enabled_setting": [
+            "//upb/wire/decode_fast:field_parsers",
+        ],
+        "//conditions:default": [],
+    }),
 )
 
 # Common support code for C++ generated code.
@@ -263,6 +263,7 @@ upb_amalgamation(
         "//upb/reflection:internal",
         "//upb/text:debug",
         "//upb/text:internal",
+        "//upb/wire:decoder",
     ],
     strip_import_prefix = ["src"],
     visibility = ["//rust:__pkg__"],
@@ -312,6 +313,7 @@ upb_amalgamation(
         "//upb/mini_table:internal",
         "//upb/reflection:descriptor_upb_proto",
         "//upb/reflection:internal",
+        "//upb/wire:decoder",
     ],
     prefix = "php-",
     strip_import_prefix = ["src"],
@@ -362,6 +364,7 @@ upb_amalgamation(
         "//upb/reflection:descriptor_upb_proto",
         "//upb/reflection:internal",
         "//upb/util:def_to_proto",
+        "//upb/wire:decoder",
     ],
     prefix = "ruby-",
     strip_import_prefix = ["src"],
@@ -374,14 +377,6 @@ cc_library(
     hdrs = ["ruby-upb.h"],
     copts = UPB_DEFAULT_COPTS,
     deps = ["//third_party/utf8_range"],
-)
-
-exports_files(
-    [
-        "third_party/lunit/console.lua",
-        "third_party/lunit/lunit.lua",
-    ],
-    visibility = ["//lua:__pkg__"],
 )
 
 filegroup(

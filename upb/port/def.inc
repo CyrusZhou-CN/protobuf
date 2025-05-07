@@ -42,6 +42,33 @@
 #define UPB_GNUC_MIN(x, y) 0
 #endif
 
+// Macros for checking for compiler attributes, defined here to avoid the
+// problem described in
+// https://gcc.gnu.org/onlinedocs/cpp/_005f_005fhas_005fattribute.html.
+#ifdef __has_attribute
+#define UPB_HAS_ATTRIBUTE(x) __has_attribute(x)
+#else
+#define UPB_HAS_ATTRIBUTE(x) 0
+#endif
+
+#ifdef __has_builtin
+#define UPB_HAS_BUILTIN(x) __has_builtin(x)
+#else
+#define UPB_HAS_BUILTIN(x) 0
+#endif
+
+#ifdef __has_extension
+#define UPB_HAS_EXTENSION(x) __has_extension(x)
+#else
+#define UPB_HAS_EXTENSION(x) 0
+#endif
+
+#ifdef __has_feature
+#define UPB_HAS_FEATURE(x) __has_feature(x)
+#else
+#define UPB_HAS_FEATURE(x) 0
+#endif
+
 #include <assert.h>
 #include <setjmp.h>
 #include <stdbool.h>
@@ -148,13 +175,9 @@ Error, UINTPTR_MAX is undefined
 #define UPB_UNLIKELY(x) (x)
 #endif
 
-#ifdef __has_builtin
-#if __has_builtin(__builtin_expect_with_probability)
+#if UPB_HAS_BUILTIN(__builtin_expect_with_probability)
 #define UPB_UNPREDICTABLE(x) \
   __builtin_expect_with_probability((bool)(x), 1, 0.5)
-#else
-#define UPB_UNPREDICTABLE(x) (x)
-#endif
 #else
 #define UPB_UNPREDICTABLE(x) (x)
 #endif
@@ -181,7 +204,7 @@ Error, UINTPTR_MAX is undefined
 #define UPB_MAX(x, y) ((x) > (y) ? (x) : (y))
 #define UPB_MIN(x, y) ((x) < (y) ? (x) : (y))
 
-#define UPB_UNUSED(var) (void)var
+#define UPB_UNUSED(var) (void)(var)
 
 // UPB_ASSUME(): in release mode, we tell the compiler to assume this is true.
 #ifdef NDEBUG
@@ -251,14 +274,10 @@ Error, UINTPTR_MAX is undefined
 #define UPB_LONGJMP(buf, val) longjmp(buf, val)
 #endif
 
-#if ((__STDC_VERSION__ >= 201112L) && !defined(__STDC_NO_ATOMICS__))
-#define UPB_USE_C11_ATOMICS
-#elif defined(__has_extension)
-#if __has_extension(c_atomic)
-#define UPB_USE_C11_ATOMICS
-#endif
-#elif defined(__GNUC__)
-// GCC supported atomics as an extension before it supported __has_extension
+#if ((__STDC_VERSION__ >= 201112L) && !defined(__STDC_NO_ATOMICS__)) || \
+    UPB_HAS_EXTENSION(c_atomic) ||                                      \
+    defined(__GNUC__)  // GCC supported atomics as an extension before it
+                       // supported __has_extension
 #define UPB_USE_C11_ATOMICS
 #elif defined(_MSC_VER)
 #define UPB_USE_MSC_ATOMICS
@@ -285,19 +304,11 @@ Error, UINTPTR_MAX is undefined
 
 /* Configure whether fasttable is switched on or not. *************************/
 
-#ifdef __has_attribute
-#define UPB_HAS_ATTRIBUTE(x) __has_attribute(x)
-#else
-#define UPB_HAS_ATTRIBUTE(x) 0
-#endif
-
 #if UPB_HAS_ATTRIBUTE(musttail)
 #define UPB_MUSTTAIL __attribute__((musttail))
 #else
 #define UPB_MUSTTAIL
 #endif
-
-#undef UPB_HAS_ATTRIBUTE
 
 /* This check is not fully robust: it does not require that we have "musttail"
  * support available. We need tail calls to avoid consuming arbitrary amounts
@@ -354,27 +365,7 @@ Error, UINTPTR_MAX is undefined
  * expected behavior.
  */
 
-/* Due to preprocessor limitations, the conditional logic for setting
- * UPB_CLANG_ASAN below cannot be consolidated into a portable one-liner.
- * See https://gcc.gnu.org/onlinedocs/cpp/_005f_005fhas_005fattribute.html.
- */
-#if defined(__has_feature)
-#if __has_feature(address_sanitizer)
-#define UPB_CLANG_ASAN 1
-#else
-#define UPB_CLANG_ASAN 0
-#endif
-#if __has_feature(thread_sanitizer)
-#define UPB_CLANG_TSAN 1
-#else
-#define UPB_CLANG_TSAN 0
-#endif
-#else
-#define UPB_CLANG_ASAN 0
-#define UPB_CLANG_TSAN 0
-#endif
-
-#if defined(__SANITIZE_ADDRESS__) || UPB_CLANG_ASAN
+#if UPB_HAS_FEATURE(address_sanitizer) || defined(__SANITIZE_ADDRESS__)
 #define UPB_ASAN 1
 #define UPB_ASAN_GUARD_SIZE 32
 #ifdef __cplusplus
@@ -392,11 +383,13 @@ Error, UINTPTR_MAX is undefined
 #else
 #define UPB_ASAN 0
 #define UPB_ASAN_GUARD_SIZE 0
-#define UPB_POISON_MEMORY_REGION(addr, size) ((void)(addr), (void)(size))
-#define UPB_UNPOISON_MEMORY_REGION(addr, size) ((void)(addr), (void)(size))
+#define UPB_POISON_MEMORY_REGION(addr, size) \
+  (UPB_UNUSED(addr), UPB_UNUSED(size))
+#define UPB_UNPOISON_MEMORY_REGION(addr, size) \
+  (UPB_UNUSED(addr), UPB_UNUSED(size))
 #endif
 
-#if defined(__SANITIZE_THREAD__) || UPB_CLANG_TSAN
+#if UPB_HAS_FEATURE(thread_sanitizer) || defined(__SANITIZE_THREAD__)
 #define UPB_TSAN_PUBLISHED_MEMBER uintptr_t upb_tsan_safely_published;
 #define UPB_TSAN_INIT_PUBLISHED(ptr) (ptr)->upb_tsan_safely_published = 0x5AFE
 #define UPB_TSAN_CHECK_PUBLISHED(ptr) \
@@ -467,6 +460,12 @@ Error, UINTPTR_MAX is undefined
 
 #undef UPB_IS_GOOGLE3
 
+#ifdef __clang__
+#define UPB_NO_SANITIZE_ADDRESS __attribute__((no_sanitize("address")))
+#else
+#define UPB_NO_SANITIZE_ADDRESS
+#endif
+
 // Linker arrays combine elements from multiple translation units into a single
 // array that can be iterated over at runtime.
 //
@@ -493,12 +492,12 @@ Error, UINTPTR_MAX is undefined
 
 #if defined(__ELF__) || defined(__wasm__)
 
-#define UPB_LINKARR_APPEND(name)                          \
-  __attribute__((retain, used, section("linkarr_" #name), \
-                 no_sanitize("address")))
-#define UPB_LINKARR_DECLARE(name, type)     \
-  extern type const __start_linkarr_##name; \
-  extern type const __stop_linkarr_##name;  \
+#define UPB_LINKARR_APPEND(name) \
+  __attribute__((retain, used,   \
+                 section("linkarr_" #name))) UPB_NO_SANITIZE_ADDRESS
+#define UPB_LINKARR_DECLARE(name, type) \
+  extern type __start_linkarr_##name;   \
+  extern type __stop_linkarr_##name;    \
   UPB_LINKARR_APPEND(name) type UPB_linkarr_internal_empty_##name[1]
 #define UPB_LINKARR_START(name) (&__start_linkarr_##name)
 #define UPB_LINKARR_STOP(name) (&__stop_linkarr_##name)
@@ -506,15 +505,15 @@ Error, UINTPTR_MAX is undefined
 #elif defined(__MACH__)
 
 /* As described in: https://stackoverflow.com/a/22366882 */
-#define UPB_LINKARR_APPEND(name)                              \
-  __attribute__((retain, used, section("__DATA,__la_" #name), \
-                 no_sanitize("address")))
-#define UPB_LINKARR_DECLARE(name, type)           \
-  extern type const __start_linkarr_##name __asm( \
-      "section$start$__DATA$__la_" #name);        \
-  extern type const __stop_linkarr_##name __asm(  \
-      "section$end$__DATA$"                       \
-      "__la_" #name);                             \
+#define UPB_LINKARR_APPEND(name) \
+  __attribute__((retain, used,   \
+                 section("__DATA,__la_" #name))) UPB_NO_SANITIZE_ADDRESS
+#define UPB_LINKARR_DECLARE(name, type)     \
+  extern type __start_linkarr_##name __asm( \
+      "section$start$__DATA$__la_" #name);  \
+  extern type __stop_linkarr_##name __asm(  \
+      "section$end$__DATA$"                 \
+      "__la_" #name);                       \
   UPB_LINKARR_APPEND(name) type UPB_linkarr_internal_empty_##name[1]
 #define UPB_LINKARR_START(name) (&__start_linkarr_##name)
 #define UPB_LINKARR_STOP(name) (&__stop_linkarr_##name)
@@ -530,7 +529,7 @@ Error, UINTPTR_MAX is undefined
 // not work on MSVC.
 #define UPB_LINKARR_APPEND(name)         \
   __declspec(allocate("la_" #name "$j")) \
-  __attribute__((retain, used, no_sanitize("address")))
+  __attribute__((retain, used)) UPB_NO_SANITIZE_ADDRESS
 #define UPB_LINKARR_DECLARE(name, type)                               \
   __declspec(allocate("la_" #name "$a")) type __start_linkarr_##name; \
   __declspec(allocate("la_" #name "$z")) type __stop_linkarr_##name;  \

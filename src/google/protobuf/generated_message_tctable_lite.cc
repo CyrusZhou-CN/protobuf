@@ -32,6 +32,7 @@
 #include "google/protobuf/io/zero_copy_stream_impl_lite.h"
 #include "google/protobuf/map.h"
 #include "google/protobuf/message_lite.h"
+#include "google/protobuf/micro_string.h"
 #include "google/protobuf/parse_context.h"
 #include "google/protobuf/port.h"
 #include "google/protobuf/repeated_field.h"
@@ -514,8 +515,8 @@ PROTOBUF_ALWAYS_INLINE MessageLite* TcParser::NewMessage(
 
 MessageLite* TcParser::AddMessage(const TcParseTableBase* table,
                                   RepeatedPtrFieldBase& field) {
-  return static_cast<MessageLite*>(field.AddInternal(
-      [table](Arena* arena) { return NewMessage(table, arena); }));
+  return field.AddFromPrototype<GenericTypeHandler<MessageLite>>(
+      table->class_data->prototype);
 }
 
 template <typename TagType, bool group_coding, bool aux_is_table>
@@ -886,8 +887,7 @@ PROTOBUF_ALWAYS_INLINE void PrefetchEnumData(uint16_t xform_val,
 PROTOBUF_ALWAYS_INLINE bool EnumIsValidAux(int32_t val, uint16_t xform_val,
                                            TcParseTableBase::FieldAux aux) {
   if (xform_val == field_layout::kTvRange) {
-    auto lo = aux.enum_range.start;
-    return lo <= val && val < (lo + aux.enum_range.length);
+    return aux.enum_range.first <= val && val <= aux.enum_range.last;
   }
   if (PROTOBUF_BUILTIN_CONSTANT_P(xform_val)) {
     return internal::ValidateEnumInlined(val, aux.enum_data);
@@ -1529,6 +1529,24 @@ PROTOBUF_ALWAYS_INLINE bool IsValidUTF8(ArenaStringPtr& field) {
 }
 
 
+PROTOBUF_ALWAYS_INLINE const char* ReadStringIntoArena(
+    MessageLite* /* msg */, const char* ptr, ParseContext* ctx,
+    uint32_t /* aux_idx */, const TcParseTableBase* /* table */,
+    MicroString& field, Arena* arena) {
+  return ctx->ReadMicroString(ptr, field, arena);
+}
+
+PROTOBUF_ALWAYS_INLINE const char* ReadStringNoArena(
+    MessageLite* /* msg */, const char* ptr, ParseContext* ctx,
+    uint32_t /* aux_idx */, const TcParseTableBase* /* table */,
+    MicroString& field) {
+  return ctx->ReadMicroString(ptr, field, nullptr);
+}
+
+PROTOBUF_ALWAYS_INLINE bool IsValidUTF8(const MicroString& field) {
+  return utf8_range::IsStructurallyValid(field.Get());
+}
+
 void EnsureArenaStringIsNotDefault(const MessageLite* msg,
                                    ArenaStringPtr* field) {
   // If we failed here we might have left the string in its IsDefault state, but
@@ -1651,6 +1669,34 @@ const char* TcParser::FastUcS1(PROTOBUF_TC_PARAM_DECL) {
 }
 const char* TcParser::FastUcS2(PROTOBUF_TC_PARAM_DECL) {
   PROTOBUF_MUSTTAIL return MiniParse(PROTOBUF_TC_PARAM_NO_DATA_PASS);
+}
+
+// MicroString variants:
+PROTOBUF_NOINLINE const char* TcParser::FastBmS1(PROTOBUF_TC_PARAM_DECL) {
+  PROTOBUF_MUSTTAIL return SingularString<uint8_t, MicroString, kNoUtf8>(
+      PROTOBUF_TC_PARAM_PASS);
+}
+PROTOBUF_NOINLINE const char* TcParser::FastBmS2(PROTOBUF_TC_PARAM_DECL) {
+  PROTOBUF_MUSTTAIL return SingularString<uint16_t, MicroString, kNoUtf8>(
+      PROTOBUF_TC_PARAM_PASS);
+}
+PROTOBUF_NOINLINE const char* TcParser::FastSmS1(PROTOBUF_TC_PARAM_DECL) {
+  PROTOBUF_MUSTTAIL return SingularString<uint8_t, MicroString,
+                                          kUtf8ValidateOnly>(
+      PROTOBUF_TC_PARAM_PASS);
+}
+PROTOBUF_NOINLINE const char* TcParser::FastSmS2(PROTOBUF_TC_PARAM_DECL) {
+  PROTOBUF_MUSTTAIL return SingularString<uint16_t, MicroString,
+                                          kUtf8ValidateOnly>(
+      PROTOBUF_TC_PARAM_PASS);
+}
+PROTOBUF_NOINLINE const char* TcParser::FastUmS1(PROTOBUF_TC_PARAM_DECL) {
+  PROTOBUF_MUSTTAIL return SingularString<uint8_t, MicroString, kUtf8>(
+      PROTOBUF_TC_PARAM_PASS);
+}
+PROTOBUF_NOINLINE const char* TcParser::FastUmS2(PROTOBUF_TC_PARAM_DECL) {
+  PROTOBUF_MUSTTAIL return SingularString<uint16_t, MicroString, kUtf8>(
+      PROTOBUF_TC_PARAM_PASS);
 }
 
 template <typename TagType, typename FieldType, TcParser::Utf8Type utf8>
@@ -1781,6 +1827,12 @@ bool TcParser::ChangeOneof(const TcParseTableBase* table,
       case field_layout::kRepAString: {
         auto& field = RefAt<ArenaStringPtr>(msg, current_entry->offset);
         field.Destroy();
+        break;
+      }
+      case field_layout::kRepMString: {
+        if (msg->GetArena() == nullptr) {
+          RefAt<MicroString>(msg, current_entry->offset).Destroy();
+        }
         break;
       }
       case field_layout::kRepCord: {
@@ -2324,6 +2376,14 @@ PROTOBUF_NOINLINE const char* TcParser::MpString(PROTOBUF_TC_PARAM_DECL) {
       break;
     }
 
+    case field_layout::kRepMString: {
+      auto& field = RefAt<MicroString>(base, entry.offset);
+      if (need_init) field.InitDefault();
+      ptr = ctx->ReadMicroString(ptr, field, msg->GetArena());
+      is_valid = MpVerifyUtf8(field.Get(), table, entry, xform_val);
+      break;
+    }
+
 
     case field_layout::kRepCord: {
       absl::Cord* field;
@@ -2743,7 +2803,10 @@ const char* TcParser::ParseOneMapEntry(
           ABSL_DCHECK_EQ(static_cast<int>(type_kind),
                          static_cast<int>(UntypedMapBase::TypeKind::kMessage));
           ABSL_DCHECK_EQ(inner_tag, value_tag);
-          ptr = ctx->ParseMessage(reinterpret_cast<MessageLite*>(obj), ptr);
+          ptr = ctx->ParseLengthDelimitedInlined(ptr, [&](const char* ptr) {
+            return ParseLoop(reinterpret_cast<MessageLite*>(obj), ptr, ctx,
+                             aux[1].table);
+          });
           if (ABSL_PREDICT_FALSE(ptr == nullptr)) return nullptr;
           continue;
         }
@@ -2912,13 +2975,14 @@ std::string TypeCardToString(uint16_t type_card) {
           ABSL_LOG(FATAL) << "Unknown type_card: 0x" << type_card;
       }
 
-      static constexpr const char* kRepNames[] = {"AString", "IString", "Cord",
-                                                  "SPiece", "SString"};
+      static constexpr const char* kRepNames[] = {
+          "AString", "IString", "Cord", "SPiece", "SString", "MString"};
       static_assert((fl::kRepAString >> fl::kRepShift) == 0, "");
       static_assert((fl::kRepIString >> fl::kRepShift) == 1, "");
       static_assert((fl::kRepCord >> fl::kRepShift) == 2, "");
       static_assert((fl::kRepSPiece >> fl::kRepShift) == 3, "");
       static_assert((fl::kRepSString >> fl::kRepShift) == 4, "");
+      static_assert((fl::kRepMString >> fl::kRepShift) == 5, "");
 
       absl::StrAppend(&out, " | ::_fl::kRep", kRepNames[rep_index]);
       break;
