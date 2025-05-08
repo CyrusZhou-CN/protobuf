@@ -1,11 +1,17 @@
 #include "google/protobuf/compiler/cpp/field_chunk.h"
 
+#include <algorithm>
 #include <cstddef>
 #include <cstdint>
 #include <vector>
 
 #include "absl/log/absl_check.h"
+#include "google/protobuf/compiler/cpp/helpers.h"
+#include "google/protobuf/compiler/cpp/options.h"
 #include "google/protobuf/descriptor.h"
+
+// must be last
+#include "google/protobuf/port_def.inc"
 
 namespace google {
 namespace protobuf {
@@ -87,7 +93,10 @@ uint32_t GenChunkMask(ChunkIterator it, ChunkIterator end,
   return chunk_mask;
 }
 
+
 }  // namespace cpp
 }  // namespace compiler
 }  // namespace protobuf
 }  // namespace google
+
+#include "google/protobuf/port_undef.inc"
