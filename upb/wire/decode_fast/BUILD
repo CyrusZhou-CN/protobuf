@@ -51,6 +51,7 @@ cc_library(
     copts = FASTTABLE_COPTS,
     visibility = [
         "//pkg:__pkg__",
+        "//upb/mini_descriptor:__pkg__",
         "//upb_generator/minitable:__pkg__",
     ],
     deps = [
@@ -104,7 +105,10 @@ cc_library(
     srcs = ["function_array.c"],
     hdrs = ["function_array.h"],
     copts = FASTTABLE_COPTS,
-    visibility = ["//upb:__pkg__"],
+    visibility = [
+        "//upb:__pkg__",
+        "//upb/mini_descriptor:__pkg__",
+    ],
     deps = [
         ":combinations",
         ":field_parsers",

@@ -195,7 +195,12 @@ static bool upb_DecodeFast_IsDisabled(uint32_t function_idx) {
   uint32_t type = upb_DecodeFast_GetType(function_idx);
 
   // Not supported yet.
-  return type == kUpb_DecodeFast_ClosedEnum;
+  if (type == kUpb_DecodeFast_ClosedEnum) return true;
+
+  // Doesn't support unlinked message fields.
+  if (type == kUpb_DecodeFast_Message) return true;
+
+  return false;
 }
 
 static bool upb_DecodeFast_TryFillEntry(const upb_MiniTable* m,
@@ -230,7 +235,7 @@ int upb_DecodeFast_BuildTable(const upb_MiniTable* m,
     }
   }
 
-  return upb_RoundUpToPowerOfTwo(max + 1);
+  return max == 0 ? 0 : upb_RoundUpToPowerOfTwo(max + 1);
 }
 
 uint8_t upb_DecodeFast_GetTableMask(int table_size) {

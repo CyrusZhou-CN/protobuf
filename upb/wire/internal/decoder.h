@@ -102,6 +102,8 @@ UPB_INLINE const char* _upb_Decoder_BufferFlipCallback(
   return new_start;
 }
 
+#if UPB_FASTTABLE
+
 UPB_INLINE
 const char* _upb_FastDecoder_TagDispatch(struct upb_Decoder* d, const char* ptr,
                                          upb_Message* msg, intptr_t table,
@@ -116,6 +118,8 @@ const char* _upb_FastDecoder_TagDispatch(struct upb_Decoder* d, const char* ptr,
   UPB_MUSTTAIL return table_p->UPB_PRIVATE(fasttable)[idx].field_parser(
       d, ptr, msg, table, hasbits, data);
 }
+
+#endif  // UPB_FASTTABLE
 
 UPB_INLINE uint32_t _upb_FastDecoder_LoadTag(const char* ptr) {
   uint16_t tag;
