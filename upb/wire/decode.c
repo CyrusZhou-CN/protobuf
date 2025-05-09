@@ -106,10 +106,6 @@ static const upb_MiniTableEnum* _upb_MiniTableSubs_EnumByField(
   return subs[field->UPB_PRIVATE(submsg_index)].UPB_PRIVATE(subenum);
 }
 
-static const char* _upb_Decoder_DecodeMessage(upb_Decoder* d, const char* ptr,
-                                              upb_Message* msg,
-                                              const upb_MiniTable* layout);
-
 UPB_NORETURN static void* _upb_Decoder_ErrorJmp(upb_Decoder* d,
                                                 upb_DecodeStatus status) {
   UPB_ASSERT(status != kUpb_DecodeStatus_Ok);
@@ -400,7 +396,7 @@ bool _upb_Decoder_CheckEnum(upb_Decoder* d, const char* ptr, upb_Message* msg,
   end = upb_Decoder_EncodeVarint32(v, end);
 
   if (!UPB_PRIVATE(_upb_Message_AddUnknown)(unknown_msg, buf, end - buf,
-                                            &d->arena, false)) {
+                                            &d->arena, NULL)) {
     _upb_Decoder_ErrorJmp(d, kUpb_DecodeStatus_OutOfMemory);
   }
   return false;
@@ -1294,9 +1290,9 @@ static const char* _upb_Decoder_DecodeUnknownField(upb_Decoder* d,
     // bounds checks are needed before adding the unknown field.
     _upb_Decoder_IsDone(d, &ptr);
     const char* input_ptr = upb_EpsCopyInputStream_GetInputPtr(&d->input, ptr);
-    if (!UPB_PRIVATE(_upb_Message_AddUnknown)(msg, input_start,
-                                              input_ptr - input_start,
-                                              &d->arena, d->input.aliasing)) {
+    if (!UPB_PRIVATE(_upb_Message_AddUnknown)(
+            msg, input_start, input_ptr - input_start, &d->arena,
+            d->input.aliasing ? d->input.buffer_start : NULL)) {
       _upb_Decoder_ErrorJmp(d, kUpb_DecodeStatus_OutOfMemory);
     }
   } else if (wire_type == kUpb_WireType_StartGroup) {
@@ -1306,9 +1302,9 @@ static const char* _upb_Decoder_DecodeUnknownField(upb_Decoder* d,
 }
 
 UPB_NOINLINE
-static const char* _upb_Decoder_DecodeMessage(upb_Decoder* d, const char* ptr,
-                                              upb_Message* msg,
-                                              const upb_MiniTable* layout) {
+const char* _upb_Decoder_DecodeMessage(upb_Decoder* d, const char* ptr,
+                                       upb_Message* msg,
+                                       const upb_MiniTable* layout) {
   uint32_t last_field_index = 0;
 
 #if UPB_FASTTABLE
@@ -1373,17 +1369,6 @@ static const char* _upb_Decoder_DecodeMessage(upb_Decoder* d, const char* ptr,
              ? _upb_Decoder_CheckRequired(d, ptr, msg, layout)
              : ptr;
 }
-
-#if UPB_FASTTABLE
-const char* _upb_FastDecoder_DecodeGeneric(struct upb_Decoder* d,
-                                           const char* ptr, upb_Message* msg,
-                                           intptr_t table, uint64_t hasbits,
-                                           uint64_t data) {
-  (void)data;
-  *(uint32_t*)msg |= hasbits;
-  return _upb_Decoder_DecodeMessage(d, ptr, msg, decode_totablep(table));
-}
-#endif
 
 static upb_DecodeStatus _upb_Decoder_DecodeTop(struct upb_Decoder* d,
                                                const char* buf,
