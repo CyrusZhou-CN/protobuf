@@ -29,12 +29,12 @@
 #include "json/config.h"
 #include "json/reader.h"
 #include "json/value.h"
+#include "binary_wireformat.h"
 #include "conformance/conformance.pb.h"
 #include "conformance_test.h"
 #include "conformance/test_protos/test_messages_edition2023.pb.h"
 #include "editions/golden/test_messages_proto2_editions.pb.h"
 #include "editions/golden/test_messages_proto3_editions.pb.h"
-#include "google/protobuf/endian.h"
 #include "google/protobuf/json/json.h"
 #include "google/protobuf/test_messages_proto2.pb.h"
 #include "google/protobuf/test_messages_proto3.pb.h"
@@ -50,7 +50,6 @@ using conformance::WireFormat;
 using google::protobuf::Descriptor;
 using google::protobuf::FieldDescriptor;
 using google::protobuf::internal::WireFormatLite;
-using google::protobuf::internal::little_endian::FromHost;
 using google::protobuf::util::NewTypeResolverForDescriptorPool;
 using protobuf_test_messages::editions::TestAllTypesEdition2023;
 using protobuf_test_messages::proto2::TestAllTypesProto2;
@@ -77,74 +76,23 @@ std::string GetTypeUrl(const Descriptor* message) {
 // We would use CodedOutputStream except that we want more freedom to build
 // arbitrary protos (even invalid ones).
 
-// The maximum number of bytes that it takes to encode a 64-bit varint.
-#define VARINT_MAX_LEN 10
-
-size_t vencode64(uint64_t val, int over_encoded_bytes, char* buf) {
-  if (val == 0) {
-    buf[0] = 0;
-    return 1;
-  }
-  size_t i = 0;
-  while (val) {
-    uint8_t byte = val & 0x7fU;
-    val >>= 7;
-    if (val || over_encoded_bytes) byte |= 0x80U;
-    buf[i++] = byte;
-  }
-  while (over_encoded_bytes--) {
-    assert(i < 10);
-    uint8_t byte = over_encoded_bytes ? 0x80 : 0;
-    buf[i++] = byte;
-  }
-  return i;
-}
-
-std::string varint(uint64_t x) {
-  char buf[VARINT_MAX_LEN];
-  size_t len = vencode64(x, 0, buf);
-  return std::string(buf, len);
-}
-
-// Encodes a varint that is |extra| bytes longer than it needs to be, but still
-// valid.
+std::string varint(uint64_t x) { return google::protobuf::Varint(x).data(); }
 std::string longvarint(uint64_t x, int extra) {
-  char buf[VARINT_MAX_LEN];
-  size_t len = vencode64(x, extra, buf);
-  return std::string(buf, len);
+  return google::protobuf::LongVarint(x, extra).data();
 }
-
-std::string fixed32(void* data) {
-  uint32_t data_le;
-  std::memcpy(&data_le, data, 4);
-  data_le = FromHost(data_le);
-  return std::string(reinterpret_cast<char*>(&data_le), 4);
-}
-std::string fixed64(void* data) {
-  uint64_t data_le;
-  std::memcpy(&data_le, data, 8);
-  data_le = FromHost(data_le);
-  return std::string(reinterpret_cast<char*>(&data_le), 8);
-}
-
 std::string delim(const std::string& buf) {
-  return absl::StrCat(varint(buf.size()), buf);
+  return google::protobuf::LengthPrefixed(buf).data();
 }
-std::string u32(uint32_t u32) { return fixed32(&u32); }
-std::string u64(uint64_t u64) { return fixed64(&u64); }
-std::string flt(float f) { return fixed32(&f); }
-std::string dbl(double d) { return fixed64(&d); }
-std::string zz32(int32_t x) {
-  return varint(WireFormatLite::ZigZagEncode32(x));
-}
-std::string zz64(int64_t x) {
-  return varint(WireFormatLite::ZigZagEncode64(x));
-}
+std::string u32(uint32_t u32) { return google::protobuf::Fixed32(u32).data(); }
+std::string u64(uint64_t u64) { return google::protobuf::Fixed64(u64).data(); }
+std::string flt(float f) { return google::protobuf::Float(f).data(); }
+std::string dbl(double d) { return google::protobuf::Double(d).data(); }
+std::string zz32(int32_t x) { return google::protobuf::SInt32(x).data(); }
+std::string zz64(int64_t x) { return google::protobuf::SInt64(x).data(); }
 
 std::string tag(uint32_t fieldnum, char wire_type) {
-  return varint((fieldnum << 3) | wire_type);
+  return google::protobuf::Tag(fieldnum, static_cast<google::protobuf::WireType>(wire_type)).data();
 }
-
 std::string tag(int fieldnum, char wire_type) {
   return tag(static_cast<uint32_t>(fieldnum), wire_type);
 }
@@ -154,14 +102,11 @@ std::string field(uint32_t fieldnum, char wire_type, std::string content) {
 }
 
 std::string group(uint32_t fieldnum, std::string content) {
-  return absl::StrCat(tag(fieldnum, WireFormatLite::WIRETYPE_START_GROUP),
-                      content,
-                      tag(fieldnum, WireFormatLite::WIRETYPE_END_GROUP));
+  return google::protobuf::DelimitedField(fieldnum, std::move(content)).data();
 }
 
 std::string len(uint32_t fieldnum, std::string content) {
-  return absl::StrCat(tag(fieldnum, WireFormatLite::WIRETYPE_LENGTH_DELIMITED),
-                      delim(content));
+  return google::protobuf::LengthPrefixedField(fieldnum, std::move(content)).data();
 }
 
 std::string GetDefaultValue(FieldDescriptor::Type type) {
