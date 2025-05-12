@@ -172,7 +172,7 @@ def _write_descriptor_set(ctx, proto_info, deps, exports, descriptor_set):
     if strict_deps:
         if proto_info.direct_sources:
             strict_importable_sources = depset(
-                direct = proto_info._direct_proto_sources,
+                direct = proto_info.direct_sources,
                 transitive = [dep._exported_sources for dep in deps],
             )
         else:

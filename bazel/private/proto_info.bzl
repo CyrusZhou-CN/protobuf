@@ -74,12 +74,6 @@ def _create_proto_info(*, srcs, deps, descriptor_set, proto_path = "", workspace
         if not bin_dir:
             fail("bin_dir parameter should be set when _virtual_imports are used")
 
-    direct_proto_sources = srcs
-    transitive_proto_sources = depset(
-        direct = direct_proto_sources,
-        transitive = [dep._transitive_proto_sources for dep in deps],
-        order = "preorder",
-    )
     transitive_sources = depset(
         direct = srcs,
         transitive = [dep.transitive_sources for dep in deps],
@@ -95,20 +89,14 @@ def _create_proto_info(*, srcs, deps, descriptor_set, proto_path = "", workspace
     )
 
     if srcs:
-        check_deps_sources = depset(direct = srcs)
+        exported_sources = depset(direct = srcs)
     else:
-        check_deps_sources = depset(transitive = [dep.check_deps_sources for dep in deps])
+        exported_sources = depset(transitive = [dep._exported_sources for dep in deps])
 
     transitive_descriptor_sets = depset(
         direct = [descriptor_set],
         transitive = [dep.transitive_descriptor_sets for dep in deps],
     )
-
-    # Layering checks.
-    if srcs:
-        exported_sources = depset(direct = direct_proto_sources)
-    else:
-        exported_sources = depset(transitive = [dep._exported_sources for dep in deps])
 
     if "_virtual_imports/" in proto_path:
         #TODO: remove bin_dir from proto_source_root (when users assuming it's there are migrated)
@@ -125,10 +113,8 @@ def _create_proto_info(*, srcs, deps, descriptor_set, proto_path = "", workspace
         transitive_descriptor_sets = transitive_descriptor_sets,
         proto_source_root = proto_source_root,
         transitive_proto_path = transitive_proto_path,
-        check_deps_sources = check_deps_sources,
+        check_deps_sources = exported_sources,
         transitive_imports = transitive_sources,
-        _direct_proto_sources = direct_proto_sources,
-        _transitive_proto_sources = transitive_proto_sources,
         _exported_sources = exported_sources,
     )
     if allow_exports:
@@ -175,10 +161,6 @@ ProtoInfo, _ = provider(
         "transitive_imports": """(depset[File]) Deprecated: use `transitive_sources` instead.""",
 
         # Internal fields:
-        "_direct_proto_sources": """(list[File]) The `ProtoSourceInfo`s from the `srcs`
-            attribute.""" + _warning,
-        "_transitive_proto_sources": """(depset[File]) The `ProtoSourceInfo`s from this
-            rule and all its dependent protocol buffer rules.""" + _warning,
         "_exported_sources": """(depset[File]) A set of `ProtoSourceInfo`s that may be
             imported by another `proto_library` depending on this one.""" + _warning,
     },
