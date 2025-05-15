@@ -34,7 +34,7 @@ class TestManagerTest : public ::testing::Test {
         failure_list_path_(absl::StrCat(
             tmp_dir_,
             testing::UnitTest::GetInstance()->current_test_info()->name())) {
-    if (!File::Exists(tmp_dir_)) {
+    if (!file::Exists(tmp_dir_, true).ok()) {
       ABSL_CHECK_OK(
           File::RecursivelyCreateDir(tmp_dir_, 0777));
     }

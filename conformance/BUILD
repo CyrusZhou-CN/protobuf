@@ -235,6 +235,7 @@ cc_test(
     srcs = ["test_manager_test.cc"],
     deps = [
         ":test_manager",
+        "//file/base:options_cc",
         "//src/google/protobuf/testing",
         "//src/google/protobuf/testing:file",
         "@abseil-cpp//absl/log:absl_check",
