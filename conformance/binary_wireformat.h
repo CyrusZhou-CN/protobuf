@@ -44,6 +44,7 @@ class Wire {
   Wire& operator=(Wire&& other) = default;
 
   bool operator==(const Wire& other) const { return buf_ == other.buf_; }
+  bool operator!=(const Wire& other) const { return !(*this == other); }
   absl::string_view data() const { return buf_; }
   std::string str() && { return std::move(buf_); }
   size_t size() const { return buf_.size(); }
