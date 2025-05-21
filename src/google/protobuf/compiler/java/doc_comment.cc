@@ -337,12 +337,14 @@ void WriteFieldEnumValueAccessorDocComment(io::Printer* printer,
                                            const FieldDescriptor* field,
                                            const FieldAccessorType type,
                                            const Options options,
-                                           const bool builder,
-                                           const bool kdoc) {
+                                           const bool builder, const bool kdoc,
+                                           const bool is_private) {
   printer->Print("/**\n");
   WriteDocCommentBody(printer, field, options, kdoc);
   WriteDebugString(printer, field, options, kdoc);
-  if (!kdoc) WriteDeprecatedJavadoc(printer, field, type, options);
+  if (!kdoc && !is_private) {
+    WriteDeprecatedJavadoc(printer, field, type, options);
+  }
   switch (type) {
     case HAZZER:
       // Should never happen
