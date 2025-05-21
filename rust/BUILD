@@ -3,7 +3,7 @@
 load("@bazel_skylib//rules:common_settings.bzl", "string_flag")
 load("@rules_pkg//pkg:mappings.bzl", "pkg_filegroup", "pkg_files", "strip_prefix")
 load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
-load("//bazel/toolchains:proto_lang_toolchain.bzl", "proto_lang_toolchain")
+load("//bazel/private:proto_lang_toolchain_experimental.bzl", "proto_lang_toolchain")  # buildifier: disable=bzl-visibility
 
 licenses(["notice"])
 
@@ -224,6 +224,8 @@ proto_lang_toolchain(
     name = "proto_rust_upb_toolchain",
     command_line = "--rust_out=$(OUT)",
     output_files = "multiple",
+    plugin = "//src/google/protobuf/compiler/rust:protoc-gen-rust",
+    plugin_format_flag = "--plugin=protoc-gen-rust=%s",
     progress_message = "Generating Rust proto_library %{label}",
     runtime = ":protobuf_upb",
     visibility = ["//visibility:public"],
@@ -233,6 +235,8 @@ proto_lang_toolchain(
     name = "proto_rust_cpp_toolchain",
     command_line = "--rust_out=$(OUT)",
     output_files = "multiple",
+    plugin = "//src/google/protobuf/compiler/rust:protoc-gen-rust",
+    plugin_format_flag = "--plugin=protoc-gen-rust=%s",
     progress_message = "Generating Rust proto_library %{label}",
     runtime = ":protobuf_cpp",
     visibility = ["//visibility:public"],
