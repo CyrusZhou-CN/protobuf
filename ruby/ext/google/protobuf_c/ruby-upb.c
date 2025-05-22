@@ -3785,8 +3785,9 @@ bool _upb_Arena_WasLastAlloc(struct upb_Arena* a, void* ptr, size_t oldsize) {
   block = block->next;
   if (block == NULL) return false;
   char* start = UPB_PTR_AT(block, kUpb_MemblockReserve, char);
-  return ptr == start && UPB_PRIVATE(_upb_Arena_AllocSpan)(oldsize) ==
-                             block->size_or_hint - kUpb_MemblockReserve;
+  return UPB_PRIVATE(upb_Xsan_PtrEq)(ptr, start) &&
+         UPB_PRIVATE(_upb_Arena_AllocSpan)(oldsize) ==
+             block->size_or_hint - kUpb_MemblockReserve;
 }
 
 
@@ -4954,7 +4955,7 @@ static void upb_CombineUnknownFields(upb_UnknownField_Context* ctx,
         break;
       }
       case kUpb_WireType_StartGroup:
-        if (--ctx->depth == 0) {
+        if (--ctx->depth < 0) {
           ctx->status = kUpb_UnknownCompareResult_MaxDepthExceeded;
           UPB_LONGJMP(ctx->err, 1);
         }
@@ -7634,9 +7635,10 @@ static void upb_Decoder_AddKnownMessageSetItem(
   upb_Message* submsg = _upb_Decoder_NewSubMessage2(
       d, ext->ext->UPB_PRIVATE(sub).UPB_PRIVATE(submsg),
       &ext->ext->UPB_PRIVATE(field), &ext->data.tagged_msg_val);
-  upb_DecodeStatus status = upb_Decode(
-      data, size, submsg, upb_MiniTableExtension_GetSubMessage(item_mt),
-      d->extreg, d->options, &d->arena);
+  upb_DecodeStatus status =
+      upb_Decode(upb_EpsCopyInputStream_GetInputPtr(&d->input, data), size,
+                 submsg, upb_MiniTableExtension_GetSubMessage(item_mt),
+                 d->extreg, d->options, &d->arena);
   if (status != kUpb_DecodeStatus_Ok) _upb_Decoder_ErrorJmp(d, status);
 }
 
@@ -8208,6 +8210,10 @@ static upb_DecodeStatus upb_Decoder_Decode(upb_Decoder* const decoder,
   UPB_PRIVATE(_upb_Arena_SwapOut)(arena, &decoder->arena);
 
   return decoder->status;
+}
+
+static uint16_t upb_DecodeOptions_GetMaxDepth(uint32_t options) {
+  return options >> 16;
 }
 
 uint16_t upb_DecodeOptions_GetEffectiveMaxDepth(uint32_t options) {
@@ -8966,6 +8972,10 @@ static upb_EncodeStatus upb_Encoder_Encode(upb_encstate* const encoder,
 
   _upb_mapsorter_destroy(&encoder->sorter);
   return encoder->status;
+}
+
+static uint16_t upb_EncodeOptions_GetMaxDepth(uint32_t options) {
+  return options >> 16;
 }
 
 uint16_t upb_EncodeOptions_GetEffectiveMaxDepth(uint32_t options) {
@@ -15808,6 +15818,26 @@ void _upb_MessageDef_LinkMiniTable(upb_DefBuilder* ctx,
 #endif
 }
 
+// Returns whether packable repeated fields in the message should be considered
+// packed by default. This is used only for the purpose of encoding
+// MiniDescriptors, so we just return true if there are more packed fields than
+// unpacked. This optimizes for smaller MiniDescriptors.
+static bool _upb_MessageDef_DefaultIsPacked(const upb_MessageDef* m) {
+  int packed = 0;
+  int unpacked = 0;
+  for (int i = 0; i < m->field_count; i++) {
+    const upb_FieldDef* f = upb_MessageDef_Field(m, i);
+    if (_upb_FieldDef_IsPackable(f)) {
+      if (upb_FieldDef_IsPacked(f)) {
+        ++packed;
+      } else {
+        ++unpacked;
+      }
+    }
+  }
+  return packed > unpacked;
+}
+
 static bool _upb_MessageDef_ValidateUtf8(const upb_MessageDef* m) {
   bool has_string = false;
   for (int i = 0; i < m->field_count; i++) {
@@ -15827,8 +15857,7 @@ static bool _upb_MessageDef_ValidateUtf8(const upb_MessageDef* m) {
 static uint64_t _upb_MessageDef_Modifiers(const upb_MessageDef* m) {
   uint64_t out = 0;
 
-  if (UPB_DESC(FeatureSet_repeated_field_encoding(m->resolved_features)) ==
-      UPB_DESC(FeatureSet_PACKED)) {
+  if (_upb_MessageDef_DefaultIsPacked(m)) {
     out |= kUpb_MessageModifier_DefaultIsPacked;
   }
 

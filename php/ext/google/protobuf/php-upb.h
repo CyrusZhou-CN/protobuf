@@ -6122,15 +6122,11 @@ UPB_INLINE uint32_t upb_DecodeOptions_MaxDepth(uint16_t depth) {
   return (uint32_t)depth << 16;
 }
 
-UPB_INLINE uint16_t upb_DecodeOptions_GetMaxDepth(uint32_t options) {
-  return options >> 16;
-}
-
 uint16_t upb_DecodeOptions_GetEffectiveMaxDepth(uint32_t options);
 
 // Enforce an upper bound on recursion depth.
 UPB_INLINE int upb_Decode_LimitDepth(uint32_t decode_options, uint32_t limit) {
-  uint32_t max_depth = upb_DecodeOptions_GetMaxDepth(decode_options);
+  uint32_t max_depth = upb_DecodeOptions_GetEffectiveMaxDepth(decode_options);
   if (max_depth > limit) max_depth = limit;
   return upb_DecodeOptions_MaxDepth(max_depth) | (decode_options & 0xffff);
 }
@@ -6224,15 +6220,11 @@ UPB_INLINE uint32_t upb_EncodeOptions_MaxDepth(uint16_t depth) {
   return (uint32_t)depth << 16;
 }
 
-UPB_INLINE uint16_t upb_EncodeOptions_GetMaxDepth(uint32_t options) {
-  return options >> 16;
-}
-
 uint16_t upb_EncodeOptions_GetEffectiveMaxDepth(uint32_t options);
 
 // Enforce an upper bound on recursion depth.
 UPB_INLINE int upb_Encode_LimitDepth(uint32_t encode_options, uint32_t limit) {
-  uint32_t max_depth = upb_EncodeOptions_GetMaxDepth(encode_options);
+  uint32_t max_depth = upb_EncodeOptions_GetEffectiveMaxDepth(encode_options);
   if (max_depth > limit) max_depth = limit;
   return upb_EncodeOptions_MaxDepth(max_depth) | (encode_options & 0xffff);
 }
@@ -13766,6 +13758,7 @@ UPB_API bool upb_FieldDef_IsEnum(const upb_FieldDef* f);
 bool upb_FieldDef_IsExtension(const upb_FieldDef* f);
 UPB_API bool upb_FieldDef_IsMap(const upb_FieldDef* f);
 bool upb_FieldDef_IsOptional(const upb_FieldDef* f);
+bool _upb_FieldDef_IsPackable(const upb_FieldDef* f);
 UPB_API bool upb_FieldDef_IsPacked(const upb_FieldDef* f);
 bool upb_FieldDef_IsPrimitive(const upb_FieldDef* f);
 UPB_API bool upb_FieldDef_IsRepeated(const upb_FieldDef* f);
