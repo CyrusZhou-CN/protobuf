@@ -127,8 +127,14 @@ CcFileList = provider(
         "textual_hdrs": "files which are included but are not self-contained",
 
         # The `internal_hdrs` are header files which appear in `srcs`.
-        # These are only used when compiling the library.
+        # They may be included only from srcs, in which case they would not need to be installed.
+        # But they also may be included from other headers, in which case they would need to be
+        # installed. Unfortunately, we cannot distinguish between these two cases with the
+        # information that we have, so we have to be conservative and install them.
         "internal_hdrs": "internal header files (only used to build .cc files)",
+
+        # The `srcs` are the source files to be built into the library. They do not need to be
+        # installed, because they are only used at compile time.
         "srcs": "source files",
     },
 )

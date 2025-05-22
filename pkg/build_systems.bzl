@@ -142,6 +142,7 @@ def _create_file_list_impl(ctx, fragment_generator):
             srcs = sorted(cc_file_list.srcs.to_list())
             hdrs = sorted(
                 depset(transitive = [
+                    cc_file_list.internal_hdrs,
                     cc_file_list.textual_hdrs,
                     cc_file_list.hdrs,
                 ]).to_list(),
