@@ -19,11 +19,7 @@ licenses(["notice"])
 
 bootstrap_cc_library(
     name = "generator",
-    srcs = [
-        "fasttable.cc",
-        "fasttable.h",
-        "generator.cc",
-    ],
+    srcs = ["generator.cc"],
     hdrs = ["generator.h"],
     bootstrap_deps = [
         "//upb_generator:common",
@@ -33,7 +29,10 @@ bootstrap_cc_library(
         "//upb_generator:plugin",
     ],
     copts = UPB_DEFAULT_CPPOPTS,
-    visibility = ["//pkg:__pkg__"],
+    visibility = [
+        "//pkg:__pkg__",
+        "//src/google/protobuf/compiler:__pkg__",
+    ],
     deps = [
         ":names",
         ":names_internal",
@@ -47,6 +46,7 @@ bootstrap_cc_library(
         "//upb:port",
         "//upb:wire_reader",
         "//upb/mini_table:internal",
+        "//upb/wire/decode_fast:select",
         "//upb_generator/common:names",
         "@abseil-cpp//absl/container:flat_hash_map",
         "@abseil-cpp//absl/container:flat_hash_set",

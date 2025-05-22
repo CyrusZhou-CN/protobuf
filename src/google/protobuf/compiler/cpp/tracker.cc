@@ -222,7 +222,7 @@ Getters StringFieldGetters(const FieldDescriptor* field, const Options& opts) {
   std::string member = FieldMemberName(field, ShouldSplit(field, opts));
 
   Getters getters;
-  if (IsArenaStringPtr(field) && !field->default_value_string().empty()) {
+  if (IsArenaStringPtr(field, opts) && !field->default_value_string().empty()) {
     getters.base =
         absl::Substitute("$0.IsDefault() ? &$1.get() : $0.UnsafeGetPointer()",
                          member, MakeDefaultFieldName(field));
@@ -241,8 +241,10 @@ Getters StringOneofGetters(const FieldDescriptor* field,
   std::string member = FieldMemberName(field, ShouldSplit(field, opts));
 
   std::string field_ptr = member;
-  if (IsArenaStringPtr(field)) {
+  if (IsArenaStringPtr(field, opts)) {
     field_ptr = absl::Substitute("$0.UnsafeGetPointer()", member);
+  } else if (IsMicroString(field, opts)) {
+    field_ptr = absl::Substitute("&$0", member);
   }
 
   std::string has =
@@ -250,12 +252,12 @@ Getters StringOneofGetters(const FieldDescriptor* field,
                        UnderscoresToCamelCase(field->name(), true));
 
   std::string default_field = MakeDefaultFieldName(field);
-  if (IsArenaStringPtr(field)) {
+  if (IsArenaStringPtr(field, opts)) {
     absl::StrAppend(&default_field, ".get()");
   }
 
   Getters getters;
-  if (field->default_value_string().empty()
+  if (field->default_value_string().empty() || IsMicroString(field, opts)
   ) {
     getters.base = absl::Substitute("$0 ? $1 : nullptr", has, field_ptr);
   } else {

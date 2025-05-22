@@ -26,6 +26,7 @@
 #include <limits>
 #include <memory>
 #include <new>  // IWYU pragma: keep
+#include <optional>
 #include <sstream>
 #include <string>
 #include <tuple>
@@ -77,6 +78,7 @@
 #include "google/protobuf/dynamic_message.h"
 #include "google/protobuf/feature_resolver.h"
 #include "google/protobuf/generated_message_util.h"
+#include "google/protobuf/internal_feature_helper.h"
 #include "google/protobuf/io/strtod.h"
 #include "google/protobuf/io/tokenizer.h"
 #include "google/protobuf/message.h"
@@ -500,6 +502,12 @@ class FlatAllocatorImpl {
     std::string* res = strings;
     Fold({(*strings++ = std::string(std::forward<In>(in)))...});
     return res;
+  }
+
+  absl::string_view AllocateStringView(const absl::string_view name) {
+    char* res = AllocateArray<char>(name.size());
+    memcpy(res, name.data(), name.size());
+    return {res, name.size()};
   }
 
   // Allocate all 5 names of the field:
@@ -1328,7 +1336,7 @@ using ExtensionsGroupedByDescriptorMap =
 using LocationsByPathMap =
     absl::flat_hash_map<std::string, const SourceCodeInfo_Location*>;
 
-absl::flat_hash_set<std::string>* NewAllowedProto3Extendee() {
+absl::flat_hash_set<std::string>* AllowedCustomOptionExtendees() {
   const char* kOptionNames[] = {
       "FileOptions",   "MessageOptions",   "FieldOptions",
       "EnumOptions",   "EnumValueOptions", "ServiceOptions",
@@ -1350,15 +1358,17 @@ absl::flat_hash_set<std::string>* NewAllowedProto3Extendee() {
   return allowed_proto3_extendees;
 }
 
-// Checks whether the extendee type is allowed in proto3.
-// Only extensions to descriptor options are allowed. We use name comparison
-// instead of comparing the descriptor directly because the extensions may be
-// defined in a different pool.
-bool AllowedExtendeeInProto3(const absl::string_view name) {
-  static auto allowed_proto3_extendees =
-      internal::OnShutdownDelete(NewAllowedProto3Extendee());
-  return allowed_proto3_extendees->find(name) !=
-         allowed_proto3_extendees->end();
+// Checks whether field is an extension for a descriptor option. Use name
+// comparison instead of comparing the descriptor directly because the
+// extensions may be defined in a different pool.
+bool IsCustomOptionExtension(const FieldDescriptor* desc) {
+  if (!desc->is_extension()) {
+    return false;
+  }
+  static auto custom_option_extendees =
+      internal::OnShutdownDelete(AllowedCustomOptionExtendees());
+  return custom_option_extendees->find(desc->containing_type()->full_name()) !=
+         custom_option_extendees->end();
 }
 
 template <typename ProtoT>
@@ -3147,6 +3157,10 @@ void FileDescriptor::CopyTo(FileDescriptorProto* proto) const {
     proto->add_weak_dependency(weak_dependencies_[i]);
   }
 
+  for (int i = 0; i < option_dependency_count(); i++) {
+    proto->add_option_dependency(option_dependency_name(i));
+  }
+
   for (int i = 0; i < message_type_count(); i++) {
     message_type(i)->CopyTo(proto->add_message_type());
   }
@@ -3656,6 +3670,10 @@ std::string FileDescriptor::DebugStringWithOptions(
       absl::SubstituteAndAppend(&contents, "import \"$0\";\n",
                                 dependency(i)->name());
     }
+  }
+  for (int i = 0; i < option_dependency_count(); i++) {
+    absl::SubstituteAndAppend(&contents, "import option \"$0\";\n",
+                              option_dependency_name(i));
   }
 
   if (!package().empty()) {
@@ -4250,14 +4268,13 @@ bool FieldDescriptor::legacy_enum_field_treated_as_closed() const {
           enum_type()->is_closed());
 }
 
-ABSL_DEPRECATED("Use !is_required() && !is_repeated() instead.")
 bool FieldDescriptor::has_optional_keyword() const {
   return proto3_optional_ ||
          (file()->edition() == Edition::EDITION_PROTO2 && !is_required() &&
           !is_repeated() && !containing_oneof());
 }
 
-FieldDescriptor::CppStringType FieldDescriptor::cpp_string_type() const {
+FieldDescriptor::CppStringType FieldDescriptor::CalculateCppStringType() const {
   ABSL_DCHECK(cpp_type() == FieldDescriptor::CPPTYPE_STRING);
 
   if (internal::cpp::IsStringFieldWithPrivatizedAccessors(*this)) {
@@ -4492,6 +4509,7 @@ class DescriptorBuilder {
   FileDescriptor* file_;
   FileDescriptorTables* file_tables_;
   absl::flat_hash_set<const FileDescriptor*> dependencies_;
+  absl::flat_hash_set<const FileDescriptor*> option_dependencies_;
 
   struct MessageHints {
     int fields_to_suggest = 0;
@@ -4547,7 +4565,7 @@ class DescriptorBuilder {
   // complex code paths that are hot and likely to be inlined heavily. However,
   // these calls themselves are cold error paths. But stack space used by the
   // code that sets up the call in many cases is paid for even when the call
-  // isn't reached. To optimize this, we use `const std::string &` to reuse
+  // isn't reached. To optimize this, we use `absl::string_view` to reuse
   // string objects where possible for the inputs and for the error message
   // itself we use a closure to build the error message inside these routines.
   // The routines themselves are marked to prevent inlining and this lets us
@@ -4564,8 +4582,10 @@ class DescriptorBuilder {
                 DescriptorPool::ErrorCollector::ErrorLocation location,
                 const char* error);
   void AddRecursiveImportError(const FileDescriptorProto& proto, int from_here);
-  void AddTwiceListedError(const FileDescriptorProto& proto, int index);
-  void AddImportError(const FileDescriptorProto& proto, int index);
+  void AddTwiceListedError(const FileDescriptorProto& proto,
+                           absl::string_view import_name);
+  void AddImportError(const FileDescriptorProto& proto,
+                      absl::string_view import_name);
 
   // Adds an error indicating that undefined_symbol was not defined.  Must
   // only be called after LookupSymbol() fails.
@@ -4587,8 +4607,12 @@ class DescriptorBuilder {
   bool IsInPackage(const FileDescriptor* file, absl::string_view package_name);
 
   // Helper function which finds all public dependencies of the given file, and
-  // stores the them in the dependencies_ set in the builder.
+  // stores them in the dependencies_ set in the builder.
   void RecordPublicDependencies(const FileDescriptor* file);
+
+  // Helper function which finds all public option dependencies of the given
+  // file, and stores them in the option_dependencies_ set in the builder.
+  void RecordPublicOptionDependencies(const FileDescriptor* file);
 
   // Like tables_->FindSymbol(), but additionally:
   // - Search the pool's underlay if not found in tables_.
@@ -5280,6 +5304,14 @@ void DescriptorBuilder::RecordPublicDependencies(const FileDescriptor* file) {
   }
 }
 
+void DescriptorBuilder::RecordPublicOptionDependencies(
+    const FileDescriptor* file) {
+  if (file == nullptr || !option_dependencies_.insert(file).second) return;
+  for (int i = 0; i < file->public_dependency_count(); i++) {
+    RecordPublicOptionDependencies(file->public_dependency(i));
+  }
+}
+
 Symbol DescriptorBuilder::FindSymbolNotEnforcingDepsHelper(
     const DescriptorPool* pool, const absl::string_view name, bool build_it) {
   // If we are looking at an underlay, we must lock its mutex_, since we are
@@ -5315,7 +5347,9 @@ Symbol DescriptorBuilder::FindSymbolNotEnforcingDeps(
   // Only find symbols which were defined in this file or one of its
   // dependencies.
   const FileDescriptor* file = result.GetFile();
-  if ((file == file_ || dependencies_.contains(file)) && !result.IsPackage()) {
+  if ((file == file_ || dependencies_.contains(file) ||
+       option_dependencies_.contains(file)) &&
+      !result.IsPackage()) {
     unused_dependency_.erase(file);
   }
   return result;
@@ -5335,7 +5369,9 @@ Symbol DescriptorBuilder::FindSymbol(const absl::string_view name,
   // Only find symbols which were defined in this file or one of its
   // dependencies.
   const FileDescriptor* file = result.GetFile();
-  if (file == file_ || dependencies_.contains(file)) {
+  if (file == file_ || dependencies_.contains(file) ||
+      (option_dependencies_.contains(file) &&
+       result.field_descriptor() != nullptr)) {
     return result;
   }
 
@@ -5350,6 +5386,10 @@ Symbol DescriptorBuilder::FindSymbol(const absl::string_view name,
     if (IsInPackage(file_, name)) return result;
     for (const auto* dep : dependencies_) {
       // Note:  A dependency may be nullptr if it was not found or had errors.
+      if (dep != nullptr && IsInPackage(dep, name)) return result;
+    }
+    for (const auto* dep : option_dependencies_) {
+      // Note:  An dependency may be nullptr if it was not found or had errors.
       if (dep != nullptr && IsInPackage(dep, name)) return result;
     }
   }
@@ -5973,6 +6013,13 @@ void DescriptorBuilder::PostProcessFieldFeatures(
     }
   }
 
+  if (field.cpp_type() == FieldDescriptor::CPPTYPE_STRING) {
+    auto string_type = field.CalculateCppStringType();
+    field.cpp_string_type_ = static_cast<uint8_t>(string_type);
+    // Check that there was no narrowing.
+    ABSL_DCHECK_EQ(field.cpp_string_type_, static_cast<uint8_t>(string_type));
+  }
+
   if (field.options_->has_ctype()) {
     field.legacy_proto_ctype_ = field.options_->ctype();
     const_cast<FieldOptions*>(  // NOLINT(google3-runtime-proto-const-cast)
@@ -6014,26 +6061,23 @@ PROTOBUF_NOINLINE void DescriptorBuilder::AddRecursiveImportError(
 }
 
 void DescriptorBuilder::AddTwiceListedError(const FileDescriptorProto& proto,
-                                            int index) {
-  AddError(proto.dependency(index), proto,
-           DescriptorPool::ErrorCollector::IMPORT, [&] {
-             return absl::StrCat("Import \"", proto.dependency(index),
-                                 "\" was listed twice.");
-           });
+                                            absl::string_view import_name) {
+  AddError(import_name, proto, DescriptorPool::ErrorCollector::IMPORT, [&] {
+    return absl::StrCat("Import \"", import_name, "\" was listed twice.");
+  });
 }
 
 void DescriptorBuilder::AddImportError(const FileDescriptorProto& proto,
-                                       int index) {
+                                       absl::string_view import_name) {
   auto make_error = [&] {
     if (pool_->fallback_database_ == nullptr) {
-      return absl::StrCat("Import \"", proto.dependency(index),
-                          "\" has not been loaded.");
+      return absl::StrCat("Import \"", import_name, "\" has not been loaded.");
     }
-    return absl::StrCat("Import \"", proto.dependency(index),
+    return absl::StrCat("Import \"", import_name,
                         "\" was not found or had errors.");
   };
-  AddError(proto.dependency(index), proto,
-           DescriptorPool::ErrorCollector::IMPORT, make_error);
+  AddError(import_name, proto, DescriptorPool::ErrorCollector::IMPORT,
+           make_error);
 }
 
 PROTOBUF_NOINLINE static bool ExistingFileMatchesProto(
@@ -6181,6 +6225,10 @@ static void PlanAllocationSize(const FileDescriptorProto& proto,
   alloc.PlanArray<int>(proto.weak_dependency_size());
   alloc.PlanArray<int>(proto.public_dependency_size());
   alloc.PlanArray<const FileDescriptor*>(proto.dependency_size());
+  alloc.PlanArray<absl::string_view>(proto.option_dependency_size());
+  for (int i = 0; i < proto.option_dependency_size(); i++) {
+    alloc.PlanArray<char>(proto.option_dependency(i).size());
+  }
 }
 
 const FileDescriptor* DescriptorBuilder::BuildFile(
@@ -6241,14 +6289,17 @@ const FileDescriptor* DescriptorBuilder::BuildFile(
   if (!pool_->lazily_build_dependencies_) {
     if (pool_->fallback_database_ != nullptr) {
       tables_->pending_files_.push_back(proto.name());
-      for (int i = 0; i < proto.dependency_size(); i++) {
-        if (tables_->FindFile(proto.dependency(i)) == nullptr &&
+      for (int i = 0;
+           i < proto.dependency_size() + proto.option_dependency_size(); i++) {
+        absl::string_view name =
+            i >= proto.dependency_size()
+                ? proto.option_dependency(i - proto.dependency_size())
+                : proto.dependency(i);
+        if (tables_->FindFile(name) == nullptr &&
             (pool_->underlay_ == nullptr ||
-             pool_->underlay_->FindFileByName(proto.dependency(i)) ==
-                 nullptr)) {
+             pool_->underlay_->FindFileByName(name) == nullptr)) {
           // We don't care what this returns since we'll find out below anyway.
-          pool_->TryFindFileInFallbackDatabase(proto.dependency(i),
-                                               deferred_validation_);
+          pool_->TryFindFileInFallbackDatabase(name, deferred_validation_);
         }
       }
       tables_->pending_files_.pop_back();
@@ -6365,6 +6416,17 @@ FileDescriptor* DescriptorBuilder::BuildFileImpl(
   result->dependency_count_ = proto.dependency_size();
   result->dependencies_ =
       alloc.AllocateArray<const FileDescriptor*>(proto.dependency_size());
+  result->option_dependency_count_ = proto.option_dependency_size();
+  result->option_dependencies_ =
+      alloc.AllocateArray<absl::string_view>(proto.option_dependency_size());
+  // Copy option dependency names to result->option_dependencies_.
+  for (int i = 0; i < proto.option_dependency_size(); ++i) {
+    result->option_dependencies_[i] =
+        alloc.AllocateStringView(proto.option_dependency(i));
+  }
+
+  std::vector<const FileDescriptor*> result_option_dependencies(
+      proto.option_dependency_size());
   result->dependencies_once_ = nullptr;
   unused_dependency_.clear();
   absl::flat_hash_set<int> weak_deps;
@@ -6373,14 +6435,19 @@ FileDescriptor* DescriptorBuilder::BuildFileImpl(
   }
 
   bool need_lazy_deps = false;
-  for (int i = 0; i < proto.dependency_size(); i++) {
-    if (!seen_dependencies.insert(proto.dependency(i)).second) {
-      AddTwiceListedError(proto, i);
+  for (int i = 0; i < proto.dependency_size() + proto.option_dependency_size();
+       i++) {
+    bool is_option_dep = i >= proto.dependency_size();
+    absl::string_view name =
+        is_option_dep ? proto.option_dependency(i - proto.dependency_size())
+                      : proto.dependency(i);
+    if (!seen_dependencies.insert(name).second) {
+      AddTwiceListedError(proto, name);
     }
 
-    const FileDescriptor* dependency = tables_->FindFile(proto.dependency(i));
+    const FileDescriptor* dependency = tables_->FindFile(name);
     if (dependency == nullptr && pool_->underlay_ != nullptr) {
-      dependency = pool_->underlay_->FindFileByName(proto.dependency(i));
+      dependency = pool_->underlay_->FindFileByName(name);
     }
 
     if (dependency == result) {
@@ -6393,15 +6460,16 @@ FileDescriptor* DescriptorBuilder::BuildFileImpl(
     if (dependency == nullptr) {
       if (!pool_->lazily_build_dependencies_) {
         if (pool_->allow_unknown_ ||
-            (!pool_->enforce_weak_ && weak_deps.contains(i))) {
+            (!pool_->enforce_weak_ && weak_deps.contains(i)) ||
+            (!pool_->enforce_option_ && is_option_dep)) {
           internal::FlatAllocator lazy_dep_alloc;
           lazy_dep_alloc.PlanArray<FileDescriptor>(1);
           lazy_dep_alloc.PlanArray<std::string>(1);
           lazy_dep_alloc.FinalizePlanning(tables_);
-          dependency = pool_->NewPlaceholderFileWithMutexHeld(
-              proto.dependency(i), lazy_dep_alloc);
+          dependency =
+              pool_->NewPlaceholderFileWithMutexHeld(name, lazy_dep_alloc);
         } else {
-          AddImportError(proto, i);
+          AddImportError(proto, name);
         }
       }
     } else {
@@ -6414,16 +6482,23 @@ FileDescriptor* DescriptorBuilder::BuildFileImpl(
         unused_dependency_.insert(dependency);
       }
     }
-
-    result->dependencies_[i] = dependency;
+    if (is_option_dep) {
+      result_option_dependencies[i - proto.dependency_size()] = dependency;
+    } else {
+      result->dependencies_[i] = dependency;
+    }
     if (pool_->lazily_build_dependencies_ && !dependency) {
       need_lazy_deps = true;
     }
   }
+
   if (need_lazy_deps) {
+    // Options dependencies may be missing. They are no longer needed after
+    // options interpretation and may be discarded by protoc.
     int total_char_size = 0;
     for (int i = 0; i < proto.dependency_size(); i++) {
-      if (result->dependencies_[i] == nullptr) {
+      const FileDescriptor* result_dependency = result->dependencies_[i];
+      if (result_dependency == nullptr) {
         total_char_size += static_cast<int>(proto.dependency(i).size());
       }
       ++total_char_size;  // For NUL char
@@ -6433,7 +6508,6 @@ FileDescriptor* DescriptorBuilder::BuildFileImpl(
         static_cast<int>(sizeof(absl::once_flag)) + total_char_size);
     result->dependencies_once_ = ::new (data) absl::once_flag{};
     char* name_data = reinterpret_cast<char*>(result->dependencies_once_ + 1);
-
     for (int i = 0; i < proto.dependency_size(); i++) {
       if (result->dependencies_[i] == nullptr) {
         memcpy(name_data, proto.dependency(i).data(),
@@ -6469,12 +6543,16 @@ FileDescriptor* DescriptorBuilder::BuildFileImpl(
 
   // Build dependency set
   dependencies_.clear();
+  option_dependencies_.clear();
   // We don't/can't do proper dependency error checking when
   // lazily_build_dependencies_, and calling dependency(i) will force
   // a dependency to be built, which we don't want.
   if (!pool_->lazily_build_dependencies_) {
     for (int i = 0; i < result->dependency_count(); i++) {
       RecordPublicDependencies(result->dependency(i));
+    }
+    for (const FileDescriptor* option_dependency : result_option_dependencies) {
+      RecordPublicOptionDependencies(option_dependency);
     }
   }
 
@@ -6957,8 +7035,13 @@ void DescriptorBuilder::BuildFieldOrExtension(const FieldDescriptorProto& proto,
   result->is_extension_ = is_extension;
   result->is_oneof_ = false;
   result->in_real_oneof_ = false;
+  result->is_map_ = false;
   result->proto3_optional_ = proto.proto3_optional();
   result->legacy_proto_ctype_ = FieldOptions::CType_MAX + 1;
+  // We initialize to STRING because descriptor.proto needs it for
+  // bootstrapping.
+  result->cpp_string_type_ =
+      static_cast<uint8_t>(FieldDescriptor::CppStringType::kString);
 
   if (proto.proto3_optional() && file_->edition() != Edition::EDITION_PROTO3) {
     AddError(result->full_name(), proto, DescriptorPool::ErrorCollector::TYPE,
@@ -7900,6 +7983,13 @@ void DescriptorBuilder::CrossLinkField(FieldDescriptor* field,
       }
     }
 
+    // Map entries must be in the same file, so we can populate it directly if
+    // the descriptor is already known. If it is not known, then it must not be
+    // a map entry.
+    if (auto* sub_message = type.descriptor()) {
+      field->is_map_ = sub_message->options().map_entry();
+    }
+
     if (!type.IsVisibleFrom(file_)) {
       AddError(field->full_name(), proto, DescriptorPool::ErrorCollector::TYPE,
                [&] { return type.GetVisibilityError(file_); });
@@ -8445,8 +8535,7 @@ void DescriptorBuilder::ValidateProto3Message(const Descriptor* message,
 
 void DescriptorBuilder::ValidateProto3Field(const FieldDescriptor* field,
                                             const FieldDescriptorProto& proto) {
-  if (field->is_extension() &&
-      !AllowedExtendeeInProto3(field->containing_type()->full_name())) {
+  if (field->is_extension() && !IsCustomOptionExtension(field)) {
     AddError(field->full_name(), proto,
              DescriptorPool::ErrorCollector::EXTENDEE,
              "Extensions in proto3 are only allowed for defining options.");
@@ -9562,9 +9651,10 @@ bool DescriptorBuilder::OptionInterpreter::InterpretSingleOption(
         });
       } else {
         return AddNameError([&] {
-          return absl::StrCat(
-              "Option \"", debug_msg_name, "\" unknown. Ensure that your proto",
-              " definition file imports the proto which defines the option.");
+          return absl::StrCat("Option \"", debug_msg_name,
+                              "\" unknown. Ensure that your proto",
+                              " definition file imports the proto which "
+                              "defines the option (i.e. via import option).");
         });
       }
     } else if (field->containing_type() != descriptor) {
@@ -10475,6 +10565,11 @@ const FileDescriptor* FileDescriptor::dependency(int index) const {
   return dependencies_[index];
 }
 
+absl::string_view FileDescriptor::option_dependency_name(int index) const {
+  ABSL_DCHECK_LT(index, option_dependency_count());
+  return option_dependencies_[index];
+}
+
 const Descriptor* MethodDescriptor::input_type() const {
   return input_type_.Get(service());
 }
@@ -10634,9 +10729,6 @@ Edition FileDescriptor::edition() const { return edition_; }
 namespace internal {
 absl::string_view ShortEditionName(Edition edition) {
   return absl::StripPrefix(Edition_Name(edition), "EDITION_");
-}
-Edition InternalFeatureHelper::GetEdition(const FileDescriptor& desc) {
-  return desc.edition();
 }
 }  // namespace internal
 

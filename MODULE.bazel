@@ -3,7 +3,7 @@
 
 module(
     name = "protobuf",
-    version = "31.0-dev",  # Automatically updated on release
+    version = "32.0-dev",  # Automatically updated on release
     compatibility_level = 1,
     repo_name = "com_google_protobuf",
 )
@@ -67,6 +67,7 @@ single_version_override(
     patch_strip = 1,
     patches = [
         "@com_google_protobuf//:Disable_bundle_install.patch",
+        "@com_google_protobuf//:Neverlink_jruby_jars.patch",
     ],
     version = "0.17.3",
 )

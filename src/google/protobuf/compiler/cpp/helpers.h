@@ -255,6 +255,10 @@ std::string PrimitiveTypeName(const Options& options,
 // methods of WireFormat.  For example, TYPE_INT32 becomes "Int32".
 const char* DeclaredTypeMethodName(FieldDescriptor::Type type);
 
+// Get the declared cpp_type name in CamelCase format, as is used e.g. for the
+// methods of v2 WireFormat.  For example, CPPTYPE_INT32 becomes "Int32".
+absl::string_view DeclaredCppTypeMethodName(FieldDescriptor::CppType type);
+
 // Return the code that evaluates to the number when compiled.
 std::string Int32ToString(int number);
 
@@ -358,10 +362,8 @@ inline bool IsString(const FieldDescriptor* field) {
 }
 
 
-inline bool IsArenaStringPtr(const FieldDescriptor* field) {
-  return field->cpp_string_type() == FieldDescriptor::CppStringType::kString ||
-         field->cpp_string_type() == FieldDescriptor::CppStringType::kView;
-}
+bool IsArenaStringPtr(const FieldDescriptor* field, const Options& opts);
+bool IsMicroString(const FieldDescriptor* field, const Options& opts);
 
 bool IsProfileDriven(const Options& options);
 
@@ -511,6 +513,14 @@ bool IsV2ParseEnabledForMessage(const Descriptor* descriptor);
 // Returns true if a message (descriptor) can have v2 table.
 bool IsV2EnabledForMessage(const Descriptor* descriptor,
                            const Options& options);
+
+#ifdef PROTOBUF_INTERNAL_V2_EXPERIMENT
+bool ShouldGenerateV2Code(const Descriptor* descriptor, const Options& options);
+
+// Returns true if a field can be batched.
+bool IsEligibleForV2Batching(const FieldDescriptor* field);
+bool HasFieldEligibleForV2Batching(const Descriptor* descriptor);
+#endif  // PROTOBUF_INTERNAL_V2_EXPERIMENT
 
 // Does this file have generated parsing, serialization, and other
 // standard methods for which reflection-based fallback implementations exist?
@@ -731,6 +741,10 @@ void ListAllFields(const Descriptor* d,
                    std::vector<const FieldDescriptor*>* fields);
 void ListAllFields(const FileDescriptor* d,
                    std::vector<const FieldDescriptor*>* fields);
+
+// Returns true if the field's position in the message is chosen by the layout
+// optimizer.
+bool IsLayoutOptimized(const FieldDescriptor* field, const Options& options);
 
 // Collects all fields from the given descriptor, excluding weak fields and
 // fields in oneofs.
@@ -1129,6 +1143,8 @@ void GenerateUtf8CheckCodeForString(io::Printer* p,
 void GenerateUtf8CheckCodeForCord(io::Printer* p, const FieldDescriptor* field,
                                   const Options& options, bool for_parse,
                                   absl::string_view parameters);
+
+bool IsStrictUtf8String(const FieldDescriptor* field, const Options& options);
 
 inline bool ShouldGenerateExternSpecializations(const Options& options) {
   // For OSS we omit the specializations to reduce codegen size.

@@ -929,21 +929,19 @@ namespace {
 // generated class should be nested in the generated proto file Java class.
 template <typename Descriptor>
 inline bool NestInFileClass(const Descriptor& descriptor) {
-  auto nest_in_file_class = JavaGenerator::GetResolvedSourceFeatures(descriptor)
-                                .GetExtension(pb::java)
-                                .nest_in_file_class();
+  auto nest_in_file_class =
+      JavaGenerator::GetResolvedSourceFeatureExtension(descriptor, pb::java)
+          .nest_in_file_class();
   ABSL_CHECK(
       nest_in_file_class !=
-      pb::JavaFeatures::NestInFileClassFeature::NEST_IN_FILE_CLASS_UNKNOWN)
-      << "Unknown value for nest_in_file_class feature. Try populating the "
-         "Java feature set defaults in your generator plugin or custom "
-         "descriptor pool.";
+      pb::JavaFeatures::NestInFileClassFeature::NEST_IN_FILE_CLASS_UNKNOWN);
 
   if (nest_in_file_class == pb::JavaFeatures::NestInFileClassFeature::LEGACY) {
     return !descriptor.file()->options().java_multiple_files();
   }
   return nest_in_file_class == pb::JavaFeatures::NestInFileClassFeature::YES;
 }
+
 
 // Returns whether the type should be nested in the file class for the given
 // descriptor, depending on different Protobuf Java API versions.
@@ -962,8 +960,8 @@ absl::Status ValidateNestInFileClassFeatureHelper(
         JavaGenerator::GetUnresolvedSourceFeatures(descriptor, pb::java);
     if (unresolved_features.has_nest_in_file_class()) {
       return absl::FailedPreconditionError(absl::StrCat(
-          "Feature next_in_file_class only applies to top-level types and is "
-          "not allowed to be set on the nexted type: ",
+          "Feature pb.java.nest_in_file_class only applies to top-level types "
+          "and is not allowed to be set on the nested type: ",
           descriptor.full_name()));
     }
   }

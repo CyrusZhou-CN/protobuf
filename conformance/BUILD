@@ -5,19 +5,22 @@
 # license that can be found in the LICENSE file or at
 # https://developers.google.com/open-source/licenses/bsd
 
-# Conformance testing for Protobuf.
+# Protobuf conformance tests.
 
-load("@rules_cc//cc:defs.bzl", "cc_binary", "cc_library", "objc_library")
-load("@rules_java//java:java_binary.bzl", "java_binary")
-load(
-    "@rules_pkg//pkg:mappings.bzl",
-    "pkg_filegroup",
-    "pkg_files",
-    "strip_prefix",
-)
-load("@rules_python//python:defs.bzl", "py_binary")
+load("@rules_cc//cc:cc_library.bzl", "cc_library")
+load("@rules_cc//cc:cc_test.bzl", "cc_test")
+load("@rules_cc//cc:defs.bzl", "cc_binary", "objc_library")
+load("@rules_java//java:defs.bzl", "java_binary")
+load("@rules_python//python:py_binary.bzl", "py_binary")
 load("@rules_ruby//ruby:defs.bzl", "rb_binary")
-load("//:protobuf.bzl", "internal_csharp_proto_library", "internal_objc_proto_library", "internal_php_proto_library", "internal_py_proto_library", "internal_ruby_proto_library")
+load(
+    "//:protobuf.bzl",
+    "internal_csharp_proto_library",
+    "internal_objc_proto_library",
+    "internal_php_proto_library",
+    "internal_py_proto_library",
+    "internal_ruby_proto_library",
+)
 load("//bazel:cc_proto_library.bzl", "cc_proto_library")
 load("//bazel:java_lite_proto_library.bzl", "java_lite_proto_library")
 load("//bazel:java_proto_library.bzl", "java_proto_library")
@@ -46,18 +49,220 @@ exports_files([
     "text_format_failure_list_php.txt",
     "text_format_failure_list_php_c.txt",
     "text_format_failure_list_python.txt",
-    "text_format_failure_list_python_cpp.txt",
-    "text_format_failure_list_python_upb.txt",
 ])
 
-cc_proto_library(
-    name = "test_messages_proto2_proto_cc",
-    deps = ["//src/google/protobuf:test_messages_proto2_proto"],
+cc_library(
+    name = "conformance_test_lib",
+    testonly = 1,
+    srcs = [
+        "conformance_test.cc",
+        "conformance_test_runner.cc",
+    ],
+    hdrs = [
+        "conformance_test.h",
+    ],
+    deps = [
+        ":conformance_cc_proto",
+        ":failure_list_trie_node",
+        ":fork_pipe_runner",
+        ":test_runner",
+        "//src/google/protobuf",
+        "//src/google/protobuf:descriptor_legacy",
+        "//src/google/protobuf:endian",
+        "//src/google/protobuf/util:differencer",
+        "@abseil-cpp//absl/container:btree",
+        "@abseil-cpp//absl/container:flat_hash_set",
+        "@abseil-cpp//absl/log:absl_check",
+        "@abseil-cpp//absl/log:absl_log",
+        "@abseil-cpp//absl/status",
+        "@abseil-cpp//absl/strings",
+        "@abseil-cpp//absl/strings:str_format",
+    ],
 )
 
-cc_proto_library(
-    name = "test_messages_proto3_proto_cc",
-    deps = ["//src/google/protobuf:test_messages_proto3_proto"],
+cc_library(
+    name = "conformance_test_main",
+    testonly = 1,
+    srcs = ["conformance_test_main.cc"],
+    deps = [
+        ":binary_json_conformance_suite",
+        ":conformance_test_lib",
+        ":text_format_conformance_suite",
+    ],
+)
+
+cc_library(
+    name = "failure_list_trie_node",
+    srcs = ["failure_list_trie_node.cc"],
+    hdrs = ["failure_list_trie_node.h"],
+    deps = [
+        "@abseil-cpp//absl/status",
+        "@abseil-cpp//absl/strings",
+        "@abseil-cpp//absl/strings:str_format",
+        "@abseil-cpp//absl/types:optional",
+    ],
+)
+
+cc_test(
+    name = "failure_list_trie_node_test",
+    srcs = ["failure_list_trie_node_test.cc"],
+    deps = [
+        ":failure_list_trie_node",
+        "@abseil-cpp//absl/status",
+        "@abseil-cpp//absl/status:statusor",
+        "@abseil-cpp//absl/strings",
+        "@abseil-cpp//absl/types:optional",
+        "@googletest//:gtest",
+        "@googletest//:gtest_main",
+    ],
+)
+
+# Add more meta-testing here. This is not to be confused with a conformance test itself.
+test_suite(
+    name = "conformance_framework_tests",
+    tests = [
+        "binary_wireformat_test",
+        "failure_list_trie_node_test",
+        "test_manager_test",
+    ],
+)
+
+cc_library(
+    name = "binary_json_conformance_suite",
+    testonly = 1,
+    srcs = ["binary_json_conformance_suite.cc"],
+    hdrs = ["binary_json_conformance_suite.h"],
+    deps = [
+        ":binary_wireformat",
+        ":conformance_cc_proto",
+        ":conformance_test_lib",
+        "//:test_messages_proto2_cc_proto",
+        "//:test_messages_proto3_cc_proto",
+        "//conformance/test_protos:test_messages_edition2023_cc_proto",
+        "//editions:test_messages_proto2_editions_cc_proto",
+        "//editions:test_messages_proto3_editions_cc_proto",
+        "//src/google/protobuf",
+        "//src/google/protobuf:endian",
+        "//src/google/protobuf:protobuf_lite",
+        "//src/google/protobuf/json",
+        "//src/google/protobuf/util:type_resolver",
+        "@abseil-cpp//absl/log:absl_check",
+        "@abseil-cpp//absl/log:absl_log",
+        "@abseil-cpp//absl/log:die_if_null",
+        "@abseil-cpp//absl/status",
+        "@abseil-cpp//absl/strings",
+        "@abseil-cpp//absl/strings:str_format",
+        "@abseil-cpp//absl/strings:string_view",
+        "@jsoncpp",
+    ],
+)
+
+cc_library(
+    name = "text_format_conformance_suite",
+    testonly = 1,
+    srcs = ["text_format_conformance_suite.cc"],
+    hdrs = ["text_format_conformance_suite.h"],
+    deps = [
+        ":conformance_test_lib",
+        "//:test_messages_proto2_cc_proto",
+        "//:test_messages_proto3_cc_proto",
+        "//conformance/test_protos:test_messages_edition2023_cc_proto",
+        "//editions:test_messages_proto2_editions_cc_proto",
+        "//editions:test_messages_proto3_editions_cc_proto",
+        "//src/google/protobuf",
+        "@abseil-cpp//absl/log:absl_log",
+        "@abseil-cpp//absl/log:die_if_null",
+        "@abseil-cpp//absl/strings",
+        "@abseil-cpp//absl/strings:str_format",
+    ],
+)
+
+cc_library(
+    name = "test_runner",
+    hdrs = ["test_runner.h"],
+    deps = ["@abseil-cpp//absl/strings:string_view"],
+)
+
+cc_library(
+    name = "fork_pipe_runner",
+    srcs = ["fork_pipe_runner.cc"],
+    hdrs = ["fork_pipe_runner.h"],
+    deps = [
+        ":conformance_cc_proto",
+        ":test_runner",
+        "//src/google/protobuf:endian",
+        "@abseil-cpp//absl/log:absl_log",
+        "@abseil-cpp//absl/strings:str_format",
+        "@abseil-cpp//absl/strings:string_view",
+        "@abseil-cpp//absl/types:span",
+    ],
+)
+
+cc_library(
+    name = "binary_wireformat",
+    testonly = 1,
+    srcs = ["binary_wireformat.cc"],
+    hdrs = ["binary_wireformat.h"],
+    deps = [
+        "//src/google/protobuf:endian",
+        "//src/google/protobuf:protobuf_lite",
+        "@abseil-cpp//absl/strings",
+    ],
+)
+
+cc_library(
+    name = "test_manager",
+    testonly = True,
+    srcs = ["test_manager.cc"],
+    hdrs = ["test_manager.h"],
+    deps = [
+        ":conformance_cc_proto",
+        ":failure_list_trie_node",
+        "//src/google/protobuf/stubs",
+        "@abseil-cpp//absl/container:btree",
+        "@abseil-cpp//absl/container:flat_hash_map",
+        "@abseil-cpp//absl/container:flat_hash_set",
+        "@abseil-cpp//absl/log:absl_check",
+        "@abseil-cpp//absl/log:absl_log",
+        "@abseil-cpp//absl/status",
+        "@abseil-cpp//absl/strings",
+        "@abseil-cpp//absl/strings:string_view",
+    ],
+)
+
+cc_test(
+    name = "test_manager_test",
+    srcs = ["test_manager_test.cc"],
+    deps = [
+        ":test_manager",
+        "//src/google/protobuf/testing",
+        "//src/google/protobuf/testing:file",
+        "@abseil-cpp//absl/log:absl_check",
+        "@abseil-cpp//absl/status",
+        "@abseil-cpp//absl/status:status_matchers",
+        "@abseil-cpp//absl/strings",
+        "@googletest//:gtest",
+        "@googletest//:gtest_main",
+    ],
+)
+
+cc_test(
+    name = "binary_wireformat_test",
+    srcs = ["binary_wireformat_test.cc"],
+    deps = [
+        ":binary_wireformat",
+        "@abseil-cpp//absl/strings",
+        "@abseil-cpp//absl/strings:string_view",
+        "@googletest//:gtest",
+        "@googletest//:gtest_main",
+    ],
+)
+
+cc_binary(
+    name = "conformance_test_runner",
+    testonly = 1,
+    visibility = ["//visibility:public"],
+    deps = [":conformance_test_main"],
 )
 
 proto_library(
@@ -71,28 +276,45 @@ cc_proto_library(
     deps = [":conformance_proto"],
 )
 
+java_proto_library(
+    name = "conformance_java_proto",
+    deps = [":conformance_proto"],
+)
+
+java_lite_proto_library(
+    name = "conformance_java_proto_lite",
+    deps = [":conformance_proto"],
+)
+
+exports_files([
+    "bazel_conformance_test_runner.sh",
+    "failure_list_cpp.txt",
+    "failure_list_csharp.txt",
+    "failure_list_java.txt",
+    "failure_list_java_lite.txt",
+    "failure_list_objc.txt",
+    "failure_list_php.txt",
+    "failure_list_php_c.txt",
+    "failure_list_python.txt",
+    "failure_list_python_cpp.txt",
+    "failure_list_python_upb.txt",
+    "failure_list_ruby.txt",
+    "failure_list_jruby.txt",
+    "failure_list_jruby_ffi.txt",
+    "text_format_failure_list_cpp.txt",
+    "text_format_failure_list_java.txt",
+    "text_format_failure_list_java_lite.txt",
+    "text_format_failure_list_php.txt",
+    "text_format_failure_list_php_c.txt",
+    "text_format_failure_list_python.txt",
+])
+
 internal_csharp_proto_library(
     name = "conformance_csharp_proto",
     srcs = ["conformance.proto"],
     visibility = [
         "//csharp:__subpackages__",
     ],
-)
-
-java_proto_library(
-    name = "conformance_java_proto",
-    visibility = [
-        "//java:__subpackages__",
-    ],
-    deps = [":conformance_proto"],
-)
-
-java_lite_proto_library(
-    name = "conformance_java_proto_lite",
-    visibility = [
-        "//java:__subpackages__",
-    ],
-    deps = [":conformance_proto"],
 )
 
 internal_objc_proto_library(
@@ -140,124 +362,14 @@ internal_ruby_proto_library(
     ],
 )
 
-cc_library(
-    name = "conformance_test",
-    testonly = 1,
-    srcs = [
-        "conformance_test.cc",
-        "conformance_test_runner.cc",
-        "failure_list_trie_node.cc",
-    ],
-    hdrs = [
-        "conformance_test.h",
-        "failure_list_trie_node.h",
-    ],
-    includes = ["."],
-    deps = [
-        ":conformance_cc_proto",
-        "//src/google/protobuf",
-        "//src/google/protobuf:descriptor_legacy",
-        "//src/google/protobuf:endian",
-        "//src/google/protobuf:protobuf_lite",
-        "//src/google/protobuf/util:differencer",
-        "//src/google/protobuf/util:json_util",
-        "//src/google/protobuf/util:type_resolver",
-        "@abseil-cpp//absl/container:btree",
-        "@abseil-cpp//absl/container:flat_hash_set",
-        "@abseil-cpp//absl/log:absl_check",
-        "@abseil-cpp//absl/log:absl_log",
-        "@abseil-cpp//absl/status",
-        "@abseil-cpp//absl/strings",
-        "@abseil-cpp//absl/strings:str_format",
-        "@abseil-cpp//absl/types:optional",
-    ],
-)
-
-cc_test(
-    name = "failure_list_trie_node_test",
-    srcs = ["failure_list_trie_node_test.cc"],
-    deps = [
-        ":conformance_test",
-        "@abseil-cpp//absl/status",
-        "@abseil-cpp//absl/status:statusor",
-        "@abseil-cpp//absl/strings",
-        "@abseil-cpp//absl/types:optional",
-        "@googletest//:gtest",
-        "@googletest//:gtest_main",
-    ],
-)
-
-# Add more meta-testing here. This is not to be confused with a conformance test itself.
-test_suite(
-    name = "conformance_framework_tests",
-    tests = ["failure_list_trie_node_test"],
-)
-
-cc_library(
-    name = "binary_json_conformance_suite",
-    testonly = 1,
-    srcs = ["binary_json_conformance_suite.cc"],
-    hdrs = ["binary_json_conformance_suite.h"],
-    deps = [
-        ":conformance_cc_proto",
-        ":conformance_test",
-        ":test_messages_proto2_proto_cc",
-        ":test_messages_proto3_proto_cc",
-        "//conformance/test_protos:test_messages_edition2023_cc_proto",
-        "//editions:test_messages_proto2_editions_cc_proto",
-        "//editions:test_messages_proto3_editions_cc_proto",
-        "//src/google/protobuf",
-        "//src/google/protobuf:protobuf_lite",
-        "//src/google/protobuf/json",
-        "//src/google/protobuf/util:type_resolver",
-        "@abseil-cpp//absl/log:absl_check",
-        "@abseil-cpp//absl/log:absl_log",
-        "@abseil-cpp//absl/log:die_if_null",
-        "@abseil-cpp//absl/status",
-        "@abseil-cpp//absl/strings",
-        "@abseil-cpp//absl/strings:str_format",
-        "@jsoncpp",
-    ],
-)
-
-cc_library(
-    name = "text_format_conformance_suite",
-    testonly = 1,
-    srcs = ["text_format_conformance_suite.cc"],
-    hdrs = ["text_format_conformance_suite.h"],
-    deps = [
-        ":conformance_test",
-        ":test_messages_proto2_proto_cc",
-        ":test_messages_proto3_proto_cc",
-        "//conformance/test_protos:test_messages_edition2023_cc_proto",
-        "//editions:test_messages_proto2_editions_cc_proto",
-        "//editions:test_messages_proto3_editions_cc_proto",
-        "//src/google/protobuf",
-        "@abseil-cpp//absl/log:absl_log",
-        "@abseil-cpp//absl/log:die_if_null",
-        "@abseil-cpp//absl/strings",
-        "@abseil-cpp//absl/strings:str_format",
-    ],
-)
-
-cc_binary(
-    name = "conformance_test_runner",
-    testonly = 1,
-    srcs = ["conformance_test_main.cc"],
-    visibility = ["//visibility:public"],
-    deps = [
-        ":binary_json_conformance_suite",
-        ":conformance_test",
-        ":text_format_conformance_suite",
-        "@abseil-cpp//absl/strings:str_format",
-    ],
-)
-
 cc_binary(
     name = "conformance_cpp",
     testonly = 1,
     srcs = ["conformance_cpp.cc"],
-    visibility = ["//src:__subpackages__"],
+    visibility = [
+        "//pkg:__pkg__",
+        "//src:__subpackages__",
+    ],
     deps = [
         ":conformance_cc_proto",
         "//:protobuf",
@@ -334,7 +446,7 @@ py_binary(
     deps = [
         ":conformance_py_proto",
         "//:protobuf_python",
-        "//conformance/test_protos:test_messages_edition2023_py_proto",
+        "//conformance/test_protos:test_messages_edition2023_py_pb2",
         "//editions:test_messages_proto2_editions_py_pb2",
         "//editions:test_messages_proto3_editions_py_pb2",
         "//python:_message",  # Make upb visible if we need it.
@@ -448,30 +560,4 @@ filegroup(
     name = "all_files",
     srcs = glob(["**/*"]),
     visibility = ["//src/google/protobuf/compiler/csharp:__pkg__"],
-)
-
-pkg_files(
-    name = "dist_files",
-    srcs = glob(
-        ["**/*"],
-        exclude = [
-            # Handled by dist_scripts:
-            "bazel_conformance_test_runner.sh",
-
-            # The following are not in autotools dist:
-            "autoload.php",
-            "failure_list_jruby.txt",
-            "update_failure_list.py",
-        ],
-    ),
-    strip_prefix = strip_prefix.from_root(""),
-    visibility = ["//pkg:__pkg__"],
-)
-
-pkg_filegroup(
-    name = "all_dist_files",
-    srcs = [
-        ":dist_files",
-    ],
-    visibility = ["//pkg:__pkg__"],
 )

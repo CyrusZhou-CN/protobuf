@@ -13,10 +13,16 @@
 #ifndef UPB_WIRE_INTERNAL_DECODER_H_
 #define UPB_WIRE_INTERNAL_DECODER_H_
 
+#include <setjmp.h>
 #include <stddef.h>
+#include <stdint.h>
+#include <string.h>
 
+#include "upb/mem/arena.h"
 #include "upb/mem/internal/arena.h"
-#include "upb/message/internal/message.h"
+#include "upb/mini_table/extension_registry.h"
+#include "upb/mini_table/internal/message.h"
+#include "upb/mini_table/message.h"
 #include "upb/wire/decode.h"
 #include "upb/wire/eps_copy_input_stream.h"
 #include "utf8_range.h"
@@ -30,10 +36,11 @@ typedef struct upb_Decoder {
   upb_EpsCopyInputStream input;
   const upb_ExtensionRegistry* extreg;
   upb_Message* original_msg;  // Pointer to preserve data to
-  int depth;                 // Tracks recursion depth to bound stack usage.
+  int depth;                  // Tracks recursion depth to bound stack usage.
   uint32_t end_group;  // field number of END_GROUP tag, else DECODE_NOGROUP.
   uint16_t options;
   bool missing_required;
+  bool message_is_done;
   union {
     upb_Arena arena;
     void* foo[UPB_ARENA_SIZE_HACK];
@@ -55,8 +62,6 @@ typedef struct upb_Decoder {
  * otherwise the compiler will see that it calls longjmp() and deduce that it is
  * noreturn. */
 const char* _upb_FastDecoder_ErrorJmp(upb_Decoder* d, int status);
-
-extern const uint8_t upb_utf8_offsets[];
 
 UPB_INLINE
 bool _upb_Decoder_VerifyUtf8Inline(const char* ptr, int len) {
@@ -80,6 +85,10 @@ UPB_INLINE const upb_MiniTable* decode_totablep(intptr_t table) {
 const char* _upb_Decoder_IsDoneFallback(upb_EpsCopyInputStream* e,
                                         const char* ptr, int overrun);
 
+const char* _upb_Decoder_DecodeMessage(upb_Decoder* d, const char* ptr,
+                                       upb_Message* msg,
+                                       const upb_MiniTable* layout);
+
 UPB_INLINE bool _upb_Decoder_IsDone(upb_Decoder* d, const char** ptr) {
   return upb_EpsCopyInputStream_IsDoneWithCallback(
       &d->input, ptr, &_upb_Decoder_IsDoneFallback);
@@ -90,29 +99,6 @@ UPB_INLINE const char* _upb_Decoder_BufferFlipCallback(
   upb_Decoder* d = (upb_Decoder*)e;
   if (!old_end) _upb_FastDecoder_ErrorJmp(d, kUpb_DecodeStatus_Malformed);
   return new_start;
-}
-
-#if UPB_FASTTABLE
-UPB_INLINE
-const char* _upb_FastDecoder_TagDispatch(upb_Decoder* d, const char* ptr,
-                                         upb_Message* msg, intptr_t table,
-                                         uint64_t hasbits, uint64_t tag) {
-  const upb_MiniTable* table_p = decode_totablep(table);
-  uint8_t mask = table;
-  uint64_t data;
-  size_t idx = tag & mask;
-  UPB_ASSUME((idx & 7) == 0);
-  idx >>= 3;
-  data = table_p->UPB_PRIVATE(fasttable)[idx].field_data ^ tag;
-  UPB_MUSTTAIL return table_p->UPB_PRIVATE(fasttable)[idx].field_parser(
-      d, ptr, msg, table, hasbits, data);
-}
-#endif
-
-UPB_INLINE uint32_t _upb_FastDecoder_LoadTag(const char* ptr) {
-  uint16_t tag;
-  memcpy(&tag, ptr, 2);
-  return tag;
 }
 
 #include "upb/port/undef.inc"

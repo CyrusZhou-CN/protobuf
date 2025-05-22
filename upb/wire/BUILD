@@ -10,22 +10,43 @@ load("//upb/bazel:build_defs.bzl", "UPB_DEFAULT_COPTS")
 package(default_applicable_licenses = ["//:license"])
 
 cc_library(
+    name = "decoder",
+    hdrs = [
+        "decode.h",
+        "internal/decoder.h",
+    ],
+    copts = UPB_DEFAULT_COPTS,
+    visibility = [
+        "//upb:__pkg__",
+        "//upb/wire/decode_fast:__subpackages__",
+    ],
+    deps = [
+        ":eps_copy_input_stream",
+        "//third_party/utf8_range",
+        "//upb:mem",
+        "//upb:message",
+        "//upb:mini_table",
+        "//upb:port",
+        "//upb/mem:internal",
+        "//upb/mini_table:internal",
+    ],
+)
+
+cc_library(
     name = "wire",
     srcs = [
         "decode.c",
         "encode.c",
         "internal/constants.h",
-        "internal/decode_fast.c",
-        "internal/decoder.h",
     ],
     hdrs = [
         "decode.h",
         "encode.h",
-        "internal/decode_fast.h",
     ],
     copts = UPB_DEFAULT_COPTS,
     visibility = ["//visibility:public"],
     deps = [
+        ":decoder",
         ":eps_copy_input_stream",
         ":reader",
         "//third_party/utf8_range",
@@ -41,7 +62,12 @@ cc_library(
         "//upb/message:iterator",
         "//upb/message:types",
         "//upb/mini_table:internal",
-    ],
+    ] + select({
+        "//upb:fasttable_enabled_setting": [
+            "//upb/wire/decode_fast:dispatch",
+        ],
+        "//conditions:default": [],
+    }),
 )
 
 cc_library(

@@ -13,6 +13,7 @@
 #include <string>
 
 #include "absl/container/flat_hash_set.h"
+#include "google/protobuf/port.h"
 
 namespace google {
 namespace protobuf {
@@ -69,6 +70,8 @@ struct Options {
   bool force_inline_string = false;
 #endif  // !PROTOBUF_STABLE_EXPERIMENTS
   bool strip_nonfunctional_codegen = false;
+  bool experimental_use_micro_string =
+      google::protobuf::internal::EnableExperimentalMicroString();
 };
 
 }  // namespace cpp

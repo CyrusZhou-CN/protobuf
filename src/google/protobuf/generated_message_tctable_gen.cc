@@ -149,10 +149,13 @@ TailCallTableInfo::FastFieldInfo::Field MakeFastFieldEntry(
    : field->is_repeated() ? PROTOBUF_PICK_FUNCTION(fn##R) \
                           : PROTOBUF_PICK_FUNCTION(fn##S))
 
-#define PROTOBUF_PICK_STRING_FUNCTION(fn)                            \
-  (field->cpp_string_type() == FieldDescriptor::CppStringType::kCord \
-       ? PROTOBUF_PICK_FUNCTION(fn##cS)                              \
-   : options.is_string_inlined ? PROTOBUF_PICK_FUNCTION(fn##iS)      \
+#define PROTOBUF_PICK_STRING_FUNCTION(fn)                                 \
+  (field->cpp_string_type() == FieldDescriptor::CppStringType::kCord      \
+       ? PROTOBUF_PICK_FUNCTION(fn##cS)                                   \
+   : field->cpp_string_type() == FieldDescriptor::CppStringType::kView && \
+           options.use_micro_string                                       \
+       ? PROTOBUF_PICK_FUNCTION(fn##mS)                                   \
+   : options.is_string_inlined ? PROTOBUF_PICK_FUNCTION(fn##iS)           \
                                : PROTOBUF_PICK_REPEATABLE_FUNCTION(fn))
 
   const FieldDescriptor* field = entry.field;
@@ -285,11 +288,7 @@ bool IsFieldEligibleForFastParsing(
       // Some bytes fields can be handled on fast path.
     case FieldDescriptor::TYPE_STRING:
     case FieldDescriptor::TYPE_BYTES: {
-      if (options.use_micro_string &&
-          field->cpp_string_type() == FieldDescriptor::CppStringType::kView) {
-        // TODO: Add fast parsers.
-        return false;
-      } else if (options.is_string_inlined) {
+      if (options.is_string_inlined) {
         ABSL_CHECK(!field->is_repeated());
         // For inlined strings, the donation state index is stored in the
         // `aux_idx` field of the fast parsing info. We need to check the range
@@ -303,9 +302,8 @@ bool IsFieldEligibleForFastParsing(
       break;
   }
 
-  // The tailcall parser can only update the first 32 hasbits. Fields with
-  // has-bits beyond the first 32 are handled by mini parsing/fallback.
-  if (entry.hasbit_idx >= 32) return false;
+  if (entry.hasbit_idx > TailCallTableInfo::kMaxFastFieldHasbitIndex)
+    return false;
 
   // If the field needs auxiliary data, then the aux index is needed. This
   // must fit in a uint8_t.
@@ -1014,8 +1012,14 @@ TailCallTableInfo::TailCallTableInfo(
     // Half the table by merging fields.
     num_fast_fields /= 2;
     for (size_t i = 0; i < num_fast_fields; ++i) {
-      if ((important_fields >> i) & 1) continue;
-      fast_fields[i] = fast_fields[i + num_fast_fields];
+      size_t merge_i = i + num_fast_fields;
+      // Overwrite the surviving entries if the discarded half contains an
+      // important field (meaning the surviving entry is not) or the surviving
+      // entry is empty.
+      if (((important_fields >> merge_i) & 1) != 0 ||
+          fast_fields[i].is_empty()) {
+        fast_fields[i] = fast_fields[merge_i];
+      }
     }
     important_fields |= important_fields >> num_fast_fields;
   }
