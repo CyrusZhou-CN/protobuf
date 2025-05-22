@@ -992,6 +992,7 @@ bool NestedInFileClass(const ServiceDescriptor& descriptor, bool immutable,
                        bool proto1_codegen) {
   return NestInFileClass(descriptor, immutable, proto1_codegen);
 }
+
 }  // namespace java
 }  // namespace compiler
 }  // namespace protobuf

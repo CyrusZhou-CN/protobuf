@@ -156,6 +156,7 @@ bool NestedInFileClass(const EnumDescriptor& descriptor, bool immutable);
 bool NestedInFileClass(const ServiceDescriptor& descriptor, bool immutable,
                        bool proto1_codegen = false);
 
+
 // Returns true if `descriptor` will be written to its own .java file.
 // `immutable` should be set to true if we're generating for the immutable API.
 // For nested messages, this always returns false, since their generated Java
