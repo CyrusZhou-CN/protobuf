@@ -51,6 +51,10 @@ class MergedDescriptorDatabase;
 // descriptors when they are needed.
 class PROTOBUF_EXPORT DescriptorDatabase {
  protected:
+#ifdef PROTOBUF_TEMPORARY_ENABLE_STRING_VIEW_DESCRIPTOR_DATABASE
+#define PROTOBUF_FUTURE_STRING_VIEW_DESCRIPTOR_DATABASE 1
+#endif
+
   // Alias to enable the migration from const std::string& to absl::string_view
   // in virtual methods. Controlled by
   // PROTOBUF_FUTURE_STRING_VIEW_DESCRIPTOR_DATABASE to allow a global switch
