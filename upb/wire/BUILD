@@ -5,7 +5,7 @@
 # license that can be found in the LICENSE file or at
 # https://developers.google.com/open-source/licenses/bsd
 
-load("//upb/bazel:build_defs.bzl", "UPB_DEFAULT_COPTS")
+load("//upb/bazel:build_defs.bzl", "UPB_DEFAULT_COPTS", "UPB_DEFAULT_CPPOPTS")
 
 package(default_applicable_licenses = ["//:license"])
 
@@ -68,6 +68,29 @@ cc_library(
         ],
         "//conditions:default": [],
     }),
+)
+
+cc_test(
+    name = "decode_test",
+    srcs = ["decode_test.cc"],
+    copts = UPB_DEFAULT_CPPOPTS,
+    deps = [
+        ":wire",
+        "//upb:base",
+        "//upb:mem",
+        "//upb:message",
+        "//upb:mini_descriptor",
+        "//upb:mini_table",
+        "//upb:port",
+        "//upb/mini_descriptor:internal",
+        "//upb/wire/decode_fast:combinations",
+        "//upb/wire/test_util:field_types",
+        "//upb/wire/test_util:wire_message",
+        "@abseil-cpp//absl/container:flat_hash_set",
+        "@abseil-cpp//absl/log:absl_check",
+        "@googletest//:gtest",
+        "@googletest//:gtest_main",
+    ],
 )
 
 cc_library(

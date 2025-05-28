@@ -13,6 +13,14 @@
 namespace upb {
 namespace test {
 
+using wire_types::Delimited;
+using wire_types::Fixed32;
+using wire_types::Fixed64;
+using wire_types::Group;
+using wire_types::Varint;
+using wire_types::WireField;
+using wire_types::WireMessage;
+
 static void EncodeVarint(uint64_t val, int varint_length, std::string* str) {
   uint64_t v = val;
   std::string tmp;

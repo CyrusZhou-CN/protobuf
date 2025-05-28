@@ -31,6 +31,7 @@ cc_library(
     ],
     hdrs = [
         "accessors.h",
+        "accessors.hpp",
         "array.h",
         "compat.h",
         "map.h",

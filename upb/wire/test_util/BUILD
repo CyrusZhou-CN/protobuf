@@ -8,6 +8,21 @@
 package(default_applicable_licenses = ["//:license"])
 
 cc_library(
+    name = "field_types",
+    testonly = True,
+    hdrs = ["field_types.h"],
+    visibility = ["//upb:__subpackages__"],
+    deps = [
+        ":wire_message",
+        "//upb:base",
+        "//upb/wire/decode_fast:combinations",
+        "@abseil-cpp//absl/base",
+        "@abseil-cpp//absl/strings:string_view",
+        "@googletest//:gtest",
+    ],
+)
+
+cc_library(
     name = "wire_message",
     testonly = True,
     srcs = ["wire_message.cc"],
