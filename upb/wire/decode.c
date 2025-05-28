@@ -828,9 +828,10 @@ static void upb_Decoder_AddKnownMessageSetItem(
   upb_Message* submsg = _upb_Decoder_NewSubMessage2(
       d, ext->ext->UPB_PRIVATE(sub).UPB_PRIVATE(submsg),
       &ext->ext->UPB_PRIVATE(field), &ext->data.tagged_msg_val);
-  upb_DecodeStatus status = upb_Decode(
-      data, size, submsg, upb_MiniTableExtension_GetSubMessage(item_mt),
-      d->extreg, d->options, &d->arena);
+  upb_DecodeStatus status =
+      upb_Decode(upb_EpsCopyInputStream_GetInputPtr(&d->input, data), size,
+                 submsg, upb_MiniTableExtension_GetSubMessage(item_mt),
+                 d->extreg, d->options, &d->arena);
   if (status != kUpb_DecodeStatus_Ok) _upb_Decoder_ErrorJmp(d, status);
 }
 
@@ -1344,7 +1345,8 @@ const char* _upb_Decoder_DecodeField(upb_Decoder* d, const char* ptr,
   }
 
 #if UPB_FASTTABLE
-  if (mt && mt->UPB_PRIVATE(table_mask) != (unsigned char)-1) {
+  if (mt && mt->UPB_PRIVATE(table_mask) != (unsigned char)-1 &&
+      !(d->options & kUpb_DecodeOption_DisableFastTable)) {
     uint16_t tag = _upb_FastDecoder_LoadTag(ptr);
     intptr_t table = decode_totable(mt);
     ptr = _upb_FastDecoder_TagDispatch(d, ptr, msg, table, 0, tag);
@@ -1402,6 +1404,10 @@ static upb_DecodeStatus upb_Decoder_Decode(upb_Decoder* const decoder,
   UPB_PRIVATE(_upb_Arena_SwapOut)(arena, &decoder->arena);
 
   return decoder->status;
+}
+
+static uint16_t upb_DecodeOptions_GetMaxDepth(uint32_t options) {
+  return options >> 16;
 }
 
 uint16_t upb_DecodeOptions_GetEffectiveMaxDepth(uint32_t options) {
