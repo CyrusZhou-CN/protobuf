@@ -203,6 +203,25 @@ bool PyUpb_IsNumpyNdarray(PyObject* obj, const upb_FieldDef* f) {
   return is_ndarray;
 }
 
+bool PyUpb_IsNumpyBoolScalar(PyObject* obj) {
+  PyObject* type_module_obj =
+      PyObject_GetAttrString((PyObject*)Py_TYPE(obj), "__module__");
+  bool is_numpy = !strcmp(PyUpb_GetStrData(type_module_obj), "numpy");
+  Py_DECREF(type_module_obj);
+  if (!is_numpy) {
+    return false;
+  }
+
+  PyObject* type_name_obj =
+      PyObject_GetAttrString((PyObject*)Py_TYPE(obj), "__name__");
+  bool is_bool = !strcmp(PyUpb_GetStrData(type_name_obj), "bool");
+  Py_DECREF(type_name_obj);
+  if (!is_bool) {
+    return false;
+  }
+  return true;
+}
+
 bool PyUpb_PyToUpb(PyObject* obj, const upb_FieldDef* f, upb_MessageValue* val,
                    upb_Arena* arena) {
   switch (upb_FieldDef_CType(f)) {
@@ -227,6 +246,17 @@ bool PyUpb_PyToUpb(PyObject* obj, const upb_FieldDef* f, upb_MessageValue* val,
     case kUpb_CType_Bool:
       if (!PyBool_Check(obj) && PyUpb_IsNumpyNdarray(obj, f)) return false;
       val->bool_val = PyLong_AsLong(obj);
+      if (PyErr_Occurred()) {
+        PyErr_Clear();
+        // Under Numpy 2.3, numpy.bool does not have an __index__ method and
+        // cannot be converted to a long using PyLong_AsLong.
+        if (PyUpb_IsNumpyBoolScalar(obj)) {
+          val->bool_val = PyObject_IsTrue(obj);
+        } else {
+          // Restore the original error.
+          val->bool_val = PyLong_AsLong(obj);
+        }
+      }
       return !PyErr_Occurred();
     case kUpb_CType_Bytes: {
       char* ptr;
