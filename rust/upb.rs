@@ -9,9 +9,9 @@
 
 use crate::__internal::{Enum, MatcherEq, Private, SealedInternal};
 use crate::{
-    AsView, IntoProxied, Map, MapIter, MapMut, MapView, Message, Mut, ProtoBytes, ProtoStr,
-    ProtoString, Proxied, ProxiedInMapValue, ProxiedInRepeated, Repeated, RepeatedMut,
-    RepeatedView, View,
+    AsView, Clear, ClearAndParse, IntoProxied, Map, MapIter, MapMut, MapView, Message, Mut,
+    ParseError, ProtoBytes, ProtoStr, ProtoString, Proxied, ProxiedInMapValue, ProxiedInRepeated,
+    Repeated, RepeatedMut, RepeatedView, View,
 };
 use core::fmt::Debug;
 use std::mem::{size_of, ManuallyDrop, MaybeUninit};
@@ -889,6 +889,13 @@ pub unsafe trait UpbGetRawMessageMut: SealedInternal {
     fn get_raw_message_mut(&mut self, _private: Private) -> RawMessage;
 }
 
+/// Internal-only trait to support blanket impls that need access to the arena of mutable messages
+/// on codegen. Must not be implemented on View proxies. Should never be used by application code.
+#[doc(hidden)]
+pub unsafe trait UpbGetArena: SealedInternal {
+    fn get_arena(&mut self, _private: Private) -> &Arena;
+}
+
 impl<T> MatcherEq for T
 where
     Self: AssociatedMiniTable + AsView + Debug,
@@ -903,5 +910,50 @@ where
                 0,
             )
         }
+    }
+}
+
+impl<T> Clear for T
+where
+    Self: AssociatedMiniTable + UpbGetRawMessageMut,
+{
+    fn clear(&mut self) {
+        unsafe { upb_Message_Clear(self.get_raw_message_mut(Private), Self::mini_table()) }
+    }
+}
+
+fn clear_and_parse_helper<T: AssociatedMiniTable + UpbGetRawMessageMut + UpbGetArena>(
+    msg: &mut T,
+    data: &[u8],
+    decode_options: i32,
+) -> Result<(), ParseError> {
+    Clear::clear(msg);
+    // SAFETY:
+    // - `data.as_ptr()` is valid to read for `data.len()`
+    // - `mini_table` is the one used to construct `msg.raw_msg()`
+    // - `msg.arena().raw()` is held for the same lifetime as `msg`.
+    unsafe {
+        upb::wire::decode_with_options(
+            data,
+            msg.get_raw_message_mut(Private),
+            T::mini_table(),
+            msg.get_arena(Private),
+            decode_options,
+        )
+    }
+    .map(|_| ())
+    .map_err(|_| ParseError)
+}
+
+impl<T> ClearAndParse for T
+where
+    Self: AssociatedMiniTable + UpbGetRawMessageMut + UpbGetArena,
+{
+    fn clear_and_parse(&mut self, data: &[u8]) -> Result<(), ParseError> {
+        clear_and_parse_helper(self, data, upb::wire::decode_options::CHECK_REQUIRED)
+    }
+
+    fn clear_and_parse_dont_enforce_required(&mut self, data: &[u8]) -> Result<(), ParseError> {
+        clear_and_parse_helper(self, data, 0)
     }
 }
