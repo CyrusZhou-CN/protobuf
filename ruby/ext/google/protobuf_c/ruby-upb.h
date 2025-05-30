@@ -232,6 +232,12 @@ Error, UINTPTR_MAX is undefined
 #define UPB_PRINTF(str, first_vararg)
 #endif
 
+#if defined(__clang__)
+#define UPB_NODEREF __attribute__((noderef))
+#else
+#define UPB_NODEREF
+#endif
+
 #define UPB_MAX(x, y) ((x) > (y) ? (x) : (y))
 #define UPB_MIN(x, y) ((x) < (y) ? (x) : (y))
 
@@ -849,13 +855,13 @@ UPB_INLINE void UPB_PRIVATE(upb_Xsan_AccessReadWrite)(upb_Xsan *xsan) {
 //
 // We need this because the decoder inlines a upb_Arena for performance but
 // the full struct is not visible outside of arena.c. Yes, I know, it's awful.
-#define UPB_ARENA_SIZE_HACK (9 + (UPB_XSAN_STRUCT_SIZE * 2))
+#define UPB_ARENA_SIZE_HACK (10 + (UPB_XSAN_STRUCT_SIZE * 2))
 
 // LINT.IfChange(upb_Arena)
 
 struct upb_Arena {
   char* UPB_ONLYBITS(ptr);
-  char* UPB_ONLYBITS(end);
+  const UPB_NODEREF char* UPB_ONLYBITS(end);
   UPB_XSAN_MEMBER
 };
 
@@ -6117,6 +6123,11 @@ enum {
    * as non-UTF-8 proto3 string fields.
    */
   kUpb_DecodeOption_AlwaysValidateUtf8 = 8,
+
+  /* EXPERIMENTAL:
+   *
+   * If set, the fasttable decoder will not be used. */
+  kUpb_DecodeOption_DisableFastTable = 16,
 };
 // LINT.ThenChange(//depot/google3/third_party/protobuf/rust/upb.rs:decode_status)
 
@@ -6124,15 +6135,11 @@ UPB_INLINE uint32_t upb_DecodeOptions_MaxDepth(uint16_t depth) {
   return (uint32_t)depth << 16;
 }
 
-UPB_INLINE uint16_t upb_DecodeOptions_GetMaxDepth(uint32_t options) {
-  return options >> 16;
-}
-
 uint16_t upb_DecodeOptions_GetEffectiveMaxDepth(uint32_t options);
 
 // Enforce an upper bound on recursion depth.
 UPB_INLINE int upb_Decode_LimitDepth(uint32_t decode_options, uint32_t limit) {
-  uint32_t max_depth = upb_DecodeOptions_GetMaxDepth(decode_options);
+  uint32_t max_depth = upb_DecodeOptions_GetEffectiveMaxDepth(decode_options);
   if (max_depth > limit) max_depth = limit;
   return upb_DecodeOptions_MaxDepth(max_depth) | (decode_options & 0xffff);
 }
@@ -6226,15 +6233,11 @@ UPB_INLINE uint32_t upb_EncodeOptions_MaxDepth(uint16_t depth) {
   return (uint32_t)depth << 16;
 }
 
-UPB_INLINE uint16_t upb_EncodeOptions_GetMaxDepth(uint32_t options) {
-  return options >> 16;
-}
-
 uint16_t upb_EncodeOptions_GetEffectiveMaxDepth(uint32_t options);
 
 // Enforce an upper bound on recursion depth.
 UPB_INLINE int upb_Encode_LimitDepth(uint32_t encode_options, uint32_t limit) {
-  uint32_t max_depth = upb_EncodeOptions_GetMaxDepth(encode_options);
+  uint32_t max_depth = upb_EncodeOptions_GetEffectiveMaxDepth(encode_options);
   if (max_depth > limit) max_depth = limit;
   return upb_EncodeOptions_MaxDepth(max_depth) | (encode_options & 0xffff);
 }
@@ -13768,6 +13771,7 @@ UPB_API bool upb_FieldDef_IsEnum(const upb_FieldDef* f);
 bool upb_FieldDef_IsExtension(const upb_FieldDef* f);
 UPB_API bool upb_FieldDef_IsMap(const upb_FieldDef* f);
 bool upb_FieldDef_IsOptional(const upb_FieldDef* f);
+bool _upb_FieldDef_IsPackable(const upb_FieldDef* f);
 UPB_API bool upb_FieldDef_IsPacked(const upb_FieldDef* f);
 bool upb_FieldDef_IsPrimitive(const upb_FieldDef* f);
 UPB_API bool upb_FieldDef_IsRepeated(const upb_FieldDef* f);
@@ -15473,6 +15477,7 @@ typedef struct upb_Decoder {
   uint32_t end_group;  // field number of END_GROUP tag, else DECODE_NOGROUP.
   uint16_t options;
   bool missing_required;
+  bool message_is_done;
   union {
     upb_Arena arena;
     void* foo[UPB_ARENA_SIZE_HACK];
@@ -16355,6 +16360,7 @@ google_protobuf_ServiceDescriptorProto* upb_ServiceDef_ToProto(
 #undef UPB_NOINLINE
 #undef UPB_NORETURN
 #undef UPB_PRINTF
+#undef UPB_NODEREF
 #undef UPB_MAX
 #undef UPB_MIN
 #undef UPB_UNUSED

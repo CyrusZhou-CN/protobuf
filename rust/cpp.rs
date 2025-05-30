@@ -7,10 +7,11 @@
 
 // Rust Protobuf runtime using the C++ kernel.
 
-use crate::__internal::{Enum, Private};
+use crate::__internal::{Enum, MatcherEq, Private};
 use crate::{
-    IntoProxied, Map, MapIter, MapMut, MapView, Message, Mut, ProtoBytes, ProtoStr, ProtoString,
-    Proxied, ProxiedInMapValue, ProxiedInRepeated, Repeated, RepeatedMut, RepeatedView, View,
+    AsView, IntoProxied, Map, MapIter, MapMut, MapView, Message, MessageViewInterop, Mut,
+    ProtoBytes, ProtoStr, ProtoString, Proxied, ProxiedInMapValue, ProxiedInRepeated, Repeated,
+    RepeatedMut, RepeatedView, View,
 };
 use core::fmt::Debug;
 use paste::paste;
@@ -104,11 +105,9 @@ pub struct InnerProtoString {
 extern "C" {
     pub fn proto2_rust_Message_delete(m: RawMessage);
     pub fn proto2_rust_Message_clear(m: RawMessage);
-    pub fn proto2_rust_Message_parse(m: RawMessage, input: SerializedData) -> bool;
-    pub fn proto2_rust_Message_parse_dont_enforce_required(
-        m: RawMessage,
-        input: SerializedData,
-    ) -> bool;
+    pub fn proto2_rust_Message_parse(m: RawMessage, input: PtrAndLen) -> bool;
+    pub fn proto2_rust_Message_parse_dont_enforce_required(m: RawMessage, input: PtrAndLen)
+        -> bool;
     pub fn proto2_rust_Message_serialize(m: RawMessage, output: &mut SerializedData) -> bool;
     pub fn proto2_rust_Message_copy_from(dst: RawMessage, src: RawMessage) -> bool;
     pub fn proto2_rust_Message_merge_from(dst: RawMessage, src: RawMessage) -> bool;
@@ -1275,6 +1274,21 @@ fn protobytes_into_cppstdstring(val: ProtoBytes) -> CppStdString {
 // call.
 fn ptrlen_to_bytes<'msg>(val: PtrAndLen) -> &'msg [u8] {
     unsafe { val.as_ref() }
+}
+
+impl<T> MatcherEq for T
+where
+    Self: AsView + Debug,
+    for<'a> View<'a, <Self as AsView>::Proxied>: MessageViewInterop<'a>,
+{
+    fn matches(&self, o: &Self) -> bool {
+        unsafe {
+            raw_message_equals(
+                NonNull::new_unchecked(self.as_view().__unstable_as_raw_message() as *mut _),
+                NonNull::new_unchecked(o.as_view().__unstable_as_raw_message() as *mut _),
+            )
+        }
+    }
 }
 
 #[cfg(test)]

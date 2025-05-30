@@ -22,13 +22,13 @@
 //
 // We need this because the decoder inlines a upb_Arena for performance but
 // the full struct is not visible outside of arena.c. Yes, I know, it's awful.
-#define UPB_ARENA_SIZE_HACK (9 + (UPB_XSAN_STRUCT_SIZE * 2))
+#define UPB_ARENA_SIZE_HACK (10 + (UPB_XSAN_STRUCT_SIZE * 2))
 
 // LINT.IfChange(upb_Arena)
 
 struct upb_Arena {
   char* UPB_ONLYBITS(ptr);
-  char* UPB_ONLYBITS(end);
+  const UPB_NODEREF char* UPB_ONLYBITS(end);
   UPB_XSAN_MEMBER
 };
 

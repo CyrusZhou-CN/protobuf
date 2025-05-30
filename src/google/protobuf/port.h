@@ -18,6 +18,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <new>
+#include <optional>
 #include <string>
 #include <type_traits>
 #include <typeinfo>
@@ -29,7 +30,6 @@
 #include "absl/base/config.h"
 #include "absl/meta/type_traits.h"
 #include "absl/strings/string_view.h"
-#include "absl/types/optional.h"
 
 #if defined(ABSL_HAVE_ADDRESS_SANITIZER)
 #include <sanitizer/asan_interface.h>
@@ -206,11 +206,11 @@ inline ToRef DownCast(From& f) {
 
 // Looks up the name of `T` via RTTI, if RTTI is available.
 template <typename T>
-inline absl::optional<absl::string_view> RttiTypeName() {
+inline std::optional<absl::string_view> RttiTypeName() {
 #if PROTOBUF_RTTI
   return typeid(T).name();
 #else
-  return absl::nullopt;
+  return std::nullopt;
 #endif
 }
 
@@ -631,6 +631,11 @@ PROTOBUF_ALWAYS_INLINE void TSanRead(const void*) {}
 PROTOBUF_ALWAYS_INLINE void TSanWrite(const void*) {}
 #endif
 
+// Like C++20's std::type_identity_t, usually used to alter type deduction in
+// templates.
+template <typename T>
+using type_identity_t = std::enable_if_t<true, T>;
+
 template <typename T>
 constexpr T* Launder(T* p) {
 #if defined(__cpp_lib_launder) && __cpp_lib_launder >= 201606L
@@ -707,10 +712,16 @@ class alignas(8) GlobalEmptyStringConstexpr {
   // Nothing to init, or destroy.
   std::string* Init() const { return nullptr; }
 
+  // Disable the optimization for MSVC.
+  // There are some builds where the default constructed string can't be used as
+  // `constinit` even though the constructor is `constexpr` and can be used
+  // during constant evaluation.
+#if !defined(_MSC_VER)
   template <typename T = std::string, bool = (T(), true)>
   static constexpr std::true_type HasConstexprDefaultConstructor(int) {
     return {};
   }
+#endif
   static constexpr std::false_type HasConstexprDefaultConstructor(char) {
     return {};
   }
