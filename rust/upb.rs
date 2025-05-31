@@ -9,9 +9,9 @@
 
 use crate::__internal::{Enum, MatcherEq, Private, SealedInternal};
 use crate::{
-    AsView, IntoProxied, Map, MapIter, MapMut, MapView, Message, MessageViewInterop, Mut,
-    ProtoBytes, ProtoStr, ProtoString, Proxied, ProxiedInMapValue, ProxiedInRepeated, Repeated,
-    RepeatedMut, RepeatedView, View,
+    AsMut, AsView, Clear, ClearAndParse, IntoProxied, Map, MapIter, MapMut, MapView, Message, Mut,
+    MutProxied, ParseError, ProtoBytes, ProtoStr, ProtoString, Proxied, ProxiedInMapValue,
+    ProxiedInRepeated, Repeated, RepeatedMut, RepeatedView, View,
 };
 use core::fmt::Debug;
 use std::mem::{size_of, ManuallyDrop, MaybeUninit};
@@ -875,19 +875,109 @@ pub unsafe fn upb_Map_InsertAndReturnIfInserted(
     }
 }
 
+/// Internal-only trait to support blanket impls that need const access to raw messages
+/// on codegen. Should never be used by application code.
+#[doc(hidden)]
+pub unsafe trait UpbGetRawMessage: SealedInternal {
+    fn get_raw_message(&self, _private: Private) -> RawMessage;
+}
+
+// The generated code only implements this trait on View proxies, so we use a blanket
+// implementation for owned messages and Mut proxies.
+unsafe impl<T> UpbGetRawMessage for T
+where
+    Self: AsMut + AsView,
+    for<'a> View<'a, <Self as AsView>::Proxied>: UpbGetRawMessage,
+{
+    fn get_raw_message(&self, _private: Private) -> RawMessage {
+        self.as_view().get_raw_message(_private)
+    }
+}
+
+/// Internal-only trait to support blanket impls that need mutable access to raw messages
+/// on codegen. Must not be implemented on View proxies. Should never be used by application code.
+#[doc(hidden)]
+pub unsafe trait UpbGetRawMessageMut: SealedInternal {
+    fn get_raw_message_mut(&mut self, _private: Private) -> RawMessage;
+}
+
+// The generated code only implements this trait on Mut proxies, so we use a blanket implementation
+// for owned messages.
+unsafe impl<T> UpbGetRawMessageMut for T
+where
+    Self: MutProxied,
+    for<'a> Mut<'a, Self>: UpbGetRawMessageMut,
+{
+    fn get_raw_message_mut(&mut self, _private: Private) -> RawMessage {
+        self.as_mut().get_raw_message_mut(_private)
+    }
+}
+
+/// Internal-only trait to support blanket impls that need const access to raw messages
+/// on codegen. Should never be used by application code.
+#[doc(hidden)]
+pub unsafe trait UpbGetArena: SealedInternal {
+    fn get_arena(&mut self, _private: Private) -> &Arena;
+}
+
 impl<T> MatcherEq for T
 where
     Self: AssociatedMiniTable + AsView + Debug,
-    for<'a> View<'a, <Self as AsView>::Proxied>: MessageViewInterop<'a>,
+    for<'a> View<'a, <Self as AsView>::Proxied>: UpbGetRawMessage,
 {
     fn matches(&self, o: &Self) -> bool {
         unsafe {
             upb_Message_IsEqual(
-                NonNull::new_unchecked(self.as_view().__unstable_as_raw_message() as *mut _),
-                NonNull::new_unchecked(o.as_view().__unstable_as_raw_message() as *mut _),
+                self.as_view().get_raw_message(Private),
+                o.as_view().get_raw_message(Private),
                 Self::mini_table(),
                 0,
             )
         }
+    }
+}
+
+impl<T> Clear for T
+where
+    Self: AssociatedMiniTable + UpbGetRawMessageMut,
+{
+    fn clear(&mut self) {
+        unsafe { upb_Message_Clear(self.get_raw_message_mut(Private), Self::mini_table()) }
+    }
+}
+
+fn clear_and_parse_helper<T: AssociatedMiniTable + UpbGetRawMessageMut + UpbGetArena>(
+    msg: &mut T,
+    data: &[u8],
+    decode_options: i32,
+) -> Result<(), ParseError> {
+    Clear::clear(msg);
+    // SAFETY:
+    // - `msg` is a valid mutable message.
+    // - `mini_table` is the one associated with `msg`
+    // - `msg.arena().raw()` is held for the same lifetime as `msg`.
+    unsafe {
+        upb::wire::decode_with_options(
+            data,
+            msg.get_raw_message_mut(Private),
+            T::mini_table(),
+            msg.get_arena(Private),
+            decode_options,
+        )
+    }
+    .map(|_| ())
+    .map_err(|_| ParseError)
+}
+
+impl<T> ClearAndParse for T
+where
+    Self: AssociatedMiniTable + UpbGetRawMessageMut + UpbGetArena,
+{
+    fn clear_and_parse(&mut self, data: &[u8]) -> Result<(), ParseError> {
+        clear_and_parse_helper(self, data, upb::wire::decode_options::CHECK_REQUIRED)
+    }
+
+    fn clear_and_parse_dont_enforce_required(&mut self, data: &[u8]) -> Result<(), ParseError> {
+        clear_and_parse_helper(self, data, 0)
     }
 }
