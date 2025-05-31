@@ -88,6 +88,7 @@ UPB_INLINE void *UPB_PRIVATE(_upb_Xsan_UnpoisonRegion)(void *addr, size_t size,
 #else
   UPB_UNUSED(size);
   UPB_UNUSED(tag);
+  UPB_ASSUME(addr);
   return addr;
 #endif
 }

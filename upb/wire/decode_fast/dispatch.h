@@ -29,6 +29,31 @@
 
 #define UPB_PARSE_ARGS d, ptr, msg, table, hasbits, data
 
+// Call using the following pattern:
+//    // Will return false.
+//    return UPB_EXIT_FASTTABLE(kUpb_DecodeFastNext_FallbackToMiniTable);
+#if false  // Edit to `true` for debugging.
+#define UPB_EXIT_FASTTABLE(n)                                            \
+  ({                                                                     \
+    fprintf(stderr, "Fasttable fallback @ %s:%d -> %s (%d)\n", __FILE__, \
+            __LINE__, #n, n);                                            \
+    *next = n;                                                           \
+    false;                                                               \
+  })
+#define UPB_ERROR_FASTTABLE(d, st, next)                              \
+  ({                                                                  \
+    fprintf(stderr, "Fasttable error @ %s:%d -> %s (%d)\n", __FILE__, \
+            __LINE__, #st, st);                                       \
+    d->status = st;                                                   \
+    next = kUpb_DecodeFastNext_Error;                                 \
+    false;                                                            \
+  })
+#else
+#define UPB_EXIT_FASTTABLE(n) (*next = n, false)
+#define UPB_ERROR_FASTTABLE(d, st, next) \
+  (d->status = st, next = kUpb_DecodeFastNext_Error, false)
+#endif
+
 #define RETURN_GENERIC(m)                                 \
   /* Uncomment either of these for debugging purposes. */ \
   /* fprintf(stderr, m); */                               \
@@ -59,7 +84,6 @@ UPB_INLINE UPB_PRESERVE_NONE const char* _upb_FastDecoder_TagDispatch(
   const _upb_FastTable_Entry* ent = &table_p->UPB_PRIVATE(fasttable)[ofs >> 3];
 #endif
 
-  _upb_Decoder_Trace(d, 'D');
   UPB_MUSTTAIL return ent->field_parser(d, ptr, msg, table, hasbits,
                                         ent->field_data ^ tag);
 }
@@ -80,6 +104,7 @@ UPB_FORCEINLINE UPB_PRESERVE_NONE const char* upb_DecodeFast_Dispatch(
 
   // Read two bytes of tag data (for a one-byte tag, the high byte is junk).
   data = _upb_FastDecoder_LoadTag(ptr);
+  _upb_Decoder_Trace(d, 'D');
   UPB_MUSTTAIL return _upb_FastDecoder_TagDispatch(UPB_PARSE_ARGS);
 }
 
@@ -170,15 +195,36 @@ typedef enum {
 
   // Alias for clarity in the code.
   kUpb_DecodeFastNext_FallbackToMiniTable = kUpb_DecodeFastNext_Return,
+
+  // Tail call to the function to parse the current field.
+  kUpb_DecodeFastNext_MessageIsDoneFallback = 3,
+
+  // Tail call to the function to parse the current field, except parse it as
+  // packed instead of unpacked.
+  kUpb_DecodeFastNext_TailCallPacked = 4,
+
+  // Tail call to the function to parse the current field, except parse it as
+  // unpacked instead of packed.
+  kUpb_DecodeFastNext_TailCallUnpacked = 5,
 } upb_DecodeFastNext;
 
-#define UPB_DECODEFAST_NEXT(next)                                           \
+const char* upb_DecodeFast_IsDoneFallback(UPB_PARSE_PARAMS);
+
+#define UPB_DECODEFAST_NEXTMAYBEPACKED(next, func_unpacked, func_packed)    \
   if (UPB_UNLIKELY(next != kUpb_DecodeFastNext_TailCallDispatch)) {         \
     switch (next) {                                                         \
       case kUpb_DecodeFastNext_Return:                                      \
         UPB_MUSTTAIL return _upb_FastDecoder_DecodeGeneric(UPB_PARSE_ARGS); \
       case kUpb_DecodeFastNext_Error:                                       \
+        UPB_ASSERT(d->status != kUpb_DecodeStatus_Ok);                      \
         return _upb_FastDecoder_ErrorJmp2(d);                               \
+      case kUpb_DecodeFastNext_MessageIsDoneFallback:                       \
+        UPB_MUSTTAIL return upb_DecodeFast_MessageIsDoneFallback(           \
+            UPB_PARSE_ARGS);                                                \
+      case kUpb_DecodeFastNext_TailCallPacked:                              \
+        UPB_MUSTTAIL return func_packed(UPB_PARSE_ARGS);                    \
+      case kUpb_DecodeFastNext_TailCallUnpacked:                            \
+        UPB_MUSTTAIL return func_unpacked(UPB_PARSE_ARGS);                  \
       default:                                                              \
         UPB_UNREACHABLE();                                                  \
     }                                                                       \
