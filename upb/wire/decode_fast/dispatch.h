@@ -60,36 +60,23 @@ const char* _upb_FastDecoder_TagDispatch(struct upb_Decoder* d, const char* ptr,
   const _upb_FastTable_Entry* ent = &table_p->UPB_PRIVATE(fasttable)[ofs >> 3];
 #endif
 
+  _upb_Decoder_Trace(d, 'D');
   UPB_MUSTTAIL return ent->field_parser(d, ptr, msg, table, hasbits,
                                         ent->field_data ^ tag);
 }
 
 UPB_NOINLINE
-static const char* fastdecode_isdonefallback(UPB_PARSE_PARAMS) {
-  int overrun = data;
-  ptr = _upb_EpsCopyInputStream_IsDoneFallbackInline(
-      &d->input, ptr, overrun, _upb_Decoder_BufferFlipCallback);
-  data = _upb_FastDecoder_LoadTag(ptr);
-  UPB_MUSTTAIL return _upb_FastDecoder_TagDispatch(UPB_PARSE_ARGS);
-}
+const char* upb_DecodeFast_MessageIsDoneFallback(UPB_PARSE_PARAMS);
 
 UPB_FORCEINLINE
-const char* fastdecode_dispatch(UPB_PARSE_PARAMS) {
+const char* upb_DecodeFast_Dispatch(UPB_PARSE_PARAMS) {
   int overrun;
-  switch (upb_EpsCopyInputStream_IsDoneStatus(&d->input, ptr, &overrun)) {
-    case kUpb_IsDoneStatus_Done: {
-      d->message_is_done = true;
-      ((uint32_t*)msg)[2] |= hasbits;  // Sync hasbits.
-      const upb_MiniTable* m = decode_totablep(table);
-      return UPB_UNLIKELY(m->UPB_PRIVATE(required_count))
-                 ? _upb_Decoder_CheckRequired(d, ptr, msg, m)
-                 : ptr;
-    }
-    case kUpb_IsDoneStatus_NotDone:
-      break;
-    case kUpb_IsDoneStatus_NeedFallback:
-      data = overrun;
-      UPB_MUSTTAIL return fastdecode_isdonefallback(UPB_PARSE_ARGS);
+  upb_IsDoneStatus status =
+      upb_EpsCopyInputStream_IsDoneStatus(&d->input, ptr, &overrun);
+
+  if (UPB_UNLIKELY(status != kUpb_IsDoneStatus_NotDone)) {
+    // End-of-message or end-of-buffer.
+    UPB_MUSTTAIL return upb_DecodeFast_MessageIsDoneFallback(UPB_PARSE_ARGS);
   }
 
   // Read two bytes of tag data (for a one-byte tag, the high byte is junk).
@@ -170,6 +157,34 @@ void upb_DecodeFast_SetHasbits(upb_Message* msg, uint64_t hasbits) {
   // TODO: Can we use `=` instead of` |=`?
   *(uint32_t*)&msg[1] |= hasbits;
 }
+
+typedef enum {
+  // Call the dispatch function using musttail.
+  kUpb_DecodeFastNext_TailCallDispatch = 0,
+
+  // Return from the function with no tail call. This is used either to signal
+  // a fallback to the mini table or the end of the message if
+  // d->message_is_done is true.
+  kUpb_DecodeFastNext_Return = 1,
+
+  kUpb_DecodeFastNext_Error = 2,
+
+  // Alias for clarity in the code.
+  kUpb_DecodeFastNext_FallbackToMiniTable = kUpb_DecodeFastNext_Return,
+} upb_DecodeFastNext;
+
+#define UPB_DECODEFAST_NEXT(next)                                           \
+  if (UPB_UNLIKELY(next != kUpb_DecodeFastNext_TailCallDispatch)) {         \
+    switch (next) {                                                         \
+      case kUpb_DecodeFastNext_Return:                                      \
+        UPB_MUSTTAIL return _upb_FastDecoder_DecodeGeneric(UPB_PARSE_ARGS); \
+      case kUpb_DecodeFastNext_Error:                                       \
+        return _upb_FastDecoder_ErrorJmp2(d);                               \
+      default:                                                              \
+        UPB_UNREACHABLE();                                                  \
+    }                                                                       \
+  }                                                                         \
+  UPB_MUSTTAIL return upb_DecodeFast_Dispatch(UPB_PARSE_ARGS);
 
 #include "upb/port/undef.inc"
 
