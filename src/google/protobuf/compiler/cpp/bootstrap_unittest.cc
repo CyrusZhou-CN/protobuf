@@ -161,9 +161,17 @@ TEST(BootstrapTest, OptionNotExist) {
   GeneratorContext* generator_context = nullptr;
   std::string parameter = "aaa";
   std::string error;
-  ASSERT_FALSE(generator.Generate(
-      pool.FindFileByName("google/protobuf/descriptor.proto"), parameter,
-      generator_context, &error));
+
+  DiskSourceTree source_tree;
+  MockErrorCollector error_collector;
+  Importer importer(&source_tree, &error_collector);
+  source_tree.MapPath("", TestUtil::TestSourceDir());
+  const std::string file_name = "google/protobuf/descriptor.proto";
+  const FileDescriptor* file = importer.Import(file_name);
+  ASSERT_TRUE(file != nullptr) << "Can't import file " << file_name << "\n";
+  EXPECT_EQ("", error_collector.text_);
+
+  ASSERT_FALSE(generator.Generate(file, parameter, generator_context, &error));
   EXPECT_EQ(error, absl::StrCat("Unknown generator option: ", parameter));
 }
 

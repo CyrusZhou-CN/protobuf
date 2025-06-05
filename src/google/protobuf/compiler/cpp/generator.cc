@@ -97,6 +97,11 @@ bool CppGenerator::Generate(const FileDescriptor* file,
                             const std::string& parameter,
                             GeneratorContext* generator_context,
                             std::string* error) const {
+  if (file == nullptr) {
+    *error = "file is null";
+    return false;
+  }
+
   std::vector<std::pair<std::string, std::string>> options;
   ParseGeneratorParameter(parameter, &options);
 
