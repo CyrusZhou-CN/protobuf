@@ -105,7 +105,7 @@ done:
     }                                                                         \
   }                                                                           \
                                                                               \
-  UPB_MUSTTAIL return fastdecode_dispatch(UPB_PARSE_ARGS);
+  UPB_MUSTTAIL return upb_DecodeFast_Dispatch(UPB_PARSE_ARGS);
 
 typedef struct {
   uint8_t valbytes;
@@ -157,7 +157,7 @@ const char* fastdecode_topackedvarint(upb_EpsCopyInputStream* e,
     _upb_FastDecoder_ErrorJmp(d, kUpb_DecodeStatus_Malformed);               \
   }                                                                          \
                                                                              \
-  UPB_MUSTTAIL return fastdecode_dispatch(d, ptr, msg, table, hasbits, 0);
+  UPB_MUSTTAIL return upb_DecodeFast_Dispatch(d, ptr, msg, table, hasbits, 0);
 
 #define FASTDECODE_VARINT(unpacked, packed, card, ...)   \
   if (card == kUpb_DecodeFast_Packed) {                  \
@@ -169,13 +169,13 @@ const char* fastdecode_topackedvarint(upb_EpsCopyInputStream* e,
 /* Generate all combinations:
  * {s,o,r,p} x {b1,v4,z4,v8,z8} x {1bt,2bt} */
 
-#define F(type, card, tagsize)                                                 \
-  UPB_NOINLINE                                                                 \
-  const char* UPB_DECODEFAST_FUNCNAME(type, card, tagsize)(UPB_PARSE_PARAMS) { \
-    FASTDECODE_VARINT(UPB_DECODEFAST_FUNCNAME(type, Repeated, tagsize),        \
-                      UPB_DECODEFAST_FUNCNAME(type, Packed, tagsize),          \
-                      kUpb_DecodeFast_##card, UPB_PARSE_ARGS,                  \
-                      kUpb_DecodeFast_##type, kUpb_DecodeFast_##tagsize);      \
+#define F(type, card, tagsize)                                            \
+  UPB_NOINLINE UPB_PRESERVE_NONE const char* UPB_DECODEFAST_FUNCNAME(     \
+      type, card, tagsize)(UPB_PARSE_PARAMS) {                            \
+    FASTDECODE_VARINT(UPB_DECODEFAST_FUNCNAME(type, Repeated, tagsize),   \
+                      UPB_DECODEFAST_FUNCNAME(type, Packed, tagsize),     \
+                      kUpb_DecodeFast_##card, UPB_PARSE_ARGS,             \
+                      kUpb_DecodeFast_##type, kUpb_DecodeFast_##tagsize); \
   }
 
 UPB_DECODEFAST_CARDINALITIES(UPB_DECODEFAST_TAGSIZES, F, Bool)

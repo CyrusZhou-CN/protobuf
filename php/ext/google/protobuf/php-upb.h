@@ -345,6 +345,12 @@ Error, UINTPTR_MAX is undefined
 #define UPB_MUSTTAIL
 #endif
 
+#if UPB_HAS_ATTRIBUTE(preserve_none)
+#define UPB_PRESERVE_NONE __attribute__((preserve_none))
+#else
+#define UPB_PRESERVE_NONE
+#endif
+
 /* This check is not fully robust: it does not require that we have "musttail"
  * support available. We need tail calls to avoid consuming arbitrary amounts
  * of stack space.
@@ -2404,9 +2410,11 @@ UPB_API_INLINE const struct upb_MiniTable* upb_MiniTableSub_Message(
 
 struct upb_Decoder;
 struct upb_Message;
-typedef const char* _upb_FieldParser(struct upb_Decoder* d, const char* ptr,
-                                     struct upb_Message* msg, intptr_t table,
-                                     uint64_t hasbits, uint64_t data);
+
+typedef UPB_PRESERVE_NONE const char* _upb_FieldParser(
+    struct upb_Decoder* d, const char* ptr, struct upb_Message* msg,
+    intptr_t table, uint64_t hasbits, uint64_t data);
+
 typedef struct {
   uint64_t field_data;
   _upb_FieldParser* field_parser;
@@ -2448,9 +2456,9 @@ struct upb_MiniTable {
   const char* UPB_PRIVATE(full_name);
 #endif
 
-#ifndef __cplusplus
-  // Flexible array member is not supported in C++, but luckily C++ doesn't need
-  // to read or write the member.
+#if UPB_FASTTABLE || !defined(__cplusplus)
+  // Flexible array member is not supported in C++, but it is an extension in
+  // every compiler that supports UPB_FASTTABLE.
   _upb_FastTable_Entry UPB_PRIVATE(fasttable)[];
 #endif
 };
@@ -4794,6 +4802,16 @@ UPB_API_INLINE void upb_Message_SetClosedEnum(struct upb_Message* msg,
 
 // Extension Setters ///////////////////////////////////////////////////////////
 
+UPB_API_INLINE bool upb_Message_SetExtensionMessage(
+    struct upb_Message* msg, const upb_MiniTableExtension* e,
+    struct upb_Message* value, upb_Arena* a) {
+  UPB_ASSERT(value);
+  UPB_ASSUME(upb_MiniTableExtension_CType(e) == kUpb_CType_Message);
+  UPB_ASSUME(UPB_PRIVATE(_upb_MiniTableExtension_GetRep)(e) ==
+             UPB_SIZE(kUpb_FieldRep_4Byte, kUpb_FieldRep_8Byte));
+  return upb_Message_SetExtension(msg, e, &value, a);
+}
+
 UPB_API_INLINE bool upb_Message_SetExtensionBool(
     struct upb_Message* msg, const upb_MiniTableExtension* e, bool value,
     upb_Arena* a) {
@@ -5507,6 +5525,10 @@ UPB_API_INLINE bool upb_Message_SetExtension(upb_Message* msg,
                                              const upb_MiniTableExtension* e,
                                              const void* value, upb_Arena* a);
 
+UPB_API_INLINE bool upb_Message_SetExtensionMessage(
+    struct upb_Message* msg, const upb_MiniTableExtension* e,
+    struct upb_Message* value, upb_Arena* a);
+
 UPB_API_INLINE bool upb_Message_SetExtensionBool(
     struct upb_Message* msg, const upb_MiniTableExtension* e, bool value,
     upb_Arena* a);
@@ -6174,6 +6196,12 @@ UPB_API upb_DecodeStatus upb_DecodeLengthPrefixed(
     const char* buf, size_t size, upb_Message* msg, size_t* num_bytes_read,
     const upb_MiniTable* mt, const upb_ExtensionRegistry* extreg, int options,
     upb_Arena* arena);
+
+// For testing: decode with tracing.
+UPB_API upb_DecodeStatus upb_DecodeWithTrace(
+    const char* buf, size_t size, upb_Message* msg, const upb_MiniTable* mt,
+    const upb_ExtensionRegistry* extreg, int options, upb_Arena* arena,
+    char* trace_buf, size_t trace_size);
 
 // Utility function for wrapper languages to get an error string from a
 // upb_DecodeStatus.
@@ -15486,8 +15514,66 @@ typedef struct upb_Decoder {
 #ifndef NDEBUG
   const char* debug_tagstart;
   const char* debug_valstart;
+  char* trace_ptr;
+  char* trace_end;
 #endif
 } upb_Decoder;
+
+UPB_INLINE const char* upb_Decoder_Init(upb_Decoder* d, const char* buf,
+                                        size_t size,
+                                        const upb_ExtensionRegistry* extreg,
+                                        int options, upb_Arena* arena,
+                                        char* trace_buf, size_t trace_size) {
+  upb_EpsCopyInputStream_Init(&d->input, &buf, size,
+                              options & kUpb_DecodeOption_AliasString);
+
+  d->extreg = extreg;
+  d->depth = upb_DecodeOptions_GetEffectiveMaxDepth(options);
+  d->end_group = DECODE_NOGROUP;
+  d->options = (uint16_t)options;
+  d->missing_required = false;
+  d->status = kUpb_DecodeStatus_Ok;
+  d->message_is_done = false;
+#ifndef NDEBUG
+  d->trace_ptr = trace_buf;
+  d->trace_end = UPB_PTRADD(trace_buf, trace_size);
+#endif
+  if (trace_buf) *trace_buf = 0;  // Null-terminate.
+
+  // Violating the encapsulation of the arena for performance reasons.
+  // This is a temporary arena that we swap into and swap out of when we are
+  // done.  The temporary arena only needs to be able to handle allocation,
+  // not fuse or free, so it does not need many of the members to be initialized
+  // (particularly parent_or_count).
+  UPB_PRIVATE(_upb_Arena_SwapIn)(&d->arena, arena);
+  return buf;
+}
+
+UPB_INLINE upb_DecodeStatus upb_Decoder_Destroy(upb_Decoder* d,
+                                                upb_Arena* arena) {
+  UPB_PRIVATE(_upb_Arena_SwapOut)(arena, &d->arena);
+  return d->status;
+}
+
+// Trace events are used to trace the progress of the decoder.
+// Events:
+//   'D'  Fast dispatch
+//   'F'  Field successfully parsed fast.
+//   '<'  Fallback to MiniTable parser.
+//   'M'  Field successfully parsed with MiniTable.
+//   'X'  Truncated -- trace buffer is full, further events were discarded.
+UPB_INLINE void _upb_Decoder_Trace(upb_Decoder* d, char event) {
+#ifndef NDEBUG
+  if (d->trace_ptr == NULL) return;
+  if (d->trace_ptr == d->trace_end - 1) {
+    d->trace_ptr[-1] = 'X';  // Truncated.
+    return;
+  }
+  d->trace_ptr[0] = event;
+  d->trace_ptr[1] = '\0';
+  d->trace_ptr++;
+#endif
+};
 
 /* Error function that will abort decoding with longjmp(). We can't declare this
  * UPB_NORETURN, even though it is appropriate, because if we do then compilers
@@ -15496,7 +15582,13 @@ typedef struct upb_Decoder {
  * of our optimizations. That is also why we must declare it in a separate file,
  * otherwise the compiler will see that it calls longjmp() and deduce that it is
  * noreturn. */
-const char* _upb_FastDecoder_ErrorJmp(upb_Decoder* d, int status);
+const char* _upb_FastDecoder_ErrorJmp2(upb_Decoder* d);
+
+UPB_INLINE
+const char* _upb_FastDecoder_ErrorJmp(upb_Decoder* d, upb_DecodeStatus status) {
+  d->status = status;
+  return _upb_FastDecoder_ErrorJmp2(d);
+}
 
 UPB_INLINE
 bool _upb_Decoder_VerifyUtf8Inline(const char* ptr, int len) {

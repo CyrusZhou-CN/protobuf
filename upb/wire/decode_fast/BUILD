@@ -38,8 +38,10 @@ cc_library(
         "//upb:message",
         "//upb:mini_table",
         "//upb:port",
+        "//upb:wire_reader",
+        "//upb/base:internal",
+        "//upb/message:internal",
         "//upb/message:types",
-        "//upb/mini_table:internal",
         "//upb/wire:decoder",
         "//upb/wire:eps_copy_input_stream",
     ],
@@ -47,6 +49,7 @@ cc_library(
 
 cc_library(
     name = "dispatch",
+    srcs = ["dispatch.c"],
     hdrs = ["dispatch.h"],
     copts = FASTTABLE_COPTS,
     visibility = ["//upb/wire:__pkg__"],
@@ -104,8 +107,9 @@ cc_library(
         "//upb/wire:__subpackages__",
     ],
     deps = [
-        "//upb:mini_table",
         "//upb:port",
+        "//upb:wire_reader",
+        "//upb/base:internal",
     ],
 )
 
@@ -115,7 +119,7 @@ cc_library(
     copts = FASTTABLE_COPTS,
     visibility = [
         "//upb:__pkg__",
-        "//upb/wire:__pkg__",
+        "//upb/wire:__subpackages__",
     ],
     deps = [
         "//upb:port",
