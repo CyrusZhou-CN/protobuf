@@ -32,6 +32,7 @@
 #include "google/protobuf/cpp_features.pb.h"
 #include "google/protobuf/descriptor.h"
 #include "google/protobuf/edition_unittest.pb.h"
+#include "google/protobuf/internal_options_bootstrap.pb.h"
 #include "google/protobuf/port.h"
 #include "google/protobuf/test_util.h"
 #include "google/protobuf/unittest.pb.h"
@@ -67,6 +68,7 @@ void AddUnittestDescriptors(
 
   add(google::protobuf::DescriptorProto::descriptor());
   add(pb::CppFeatures::descriptor());
+  add(pb::InternalFieldOptionsCpp::descriptor());
   add(edition_unittest::TestAllTypes::descriptor());
 }
 
