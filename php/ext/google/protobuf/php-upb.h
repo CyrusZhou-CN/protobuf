@@ -345,6 +345,12 @@ Error, UINTPTR_MAX is undefined
 #define UPB_MUSTTAIL
 #endif
 
+#if UPB_HAS_ATTRIBUTE(preserve_none)
+#define UPB_PRESERVE_NONE __attribute__((preserve_none))
+#else
+#define UPB_PRESERVE_NONE
+#endif
+
 /* This check is not fully robust: it does not require that we have "musttail"
  * support available. We need tail calls to avoid consuming arbitrary amounts
  * of stack space.
@@ -776,6 +782,14 @@ UPB_INLINE void *UPB_PRIVATE(_upb_Xsan_UnpoisonRegion)(void *addr, size_t size,
 #else
   UPB_UNUSED(size);
   UPB_UNUSED(tag);
+
+  // `addr` is the pointer that will be returned from arena alloc/realloc
+  // functions.  In this code-path we know it must be non-NULL, but the compiler
+  // doesn't know this unless we add a UPB_ASSUME() annotation.
+  //
+  // This will let the optimizer optimize away NULL-checks if it can see that
+  // this path was taken.
+  UPB_ASSUME(addr);
   return addr;
 #endif
 }
@@ -853,7 +867,7 @@ UPB_INLINE void UPB_PRIVATE(upb_Xsan_AccessReadWrite)(upb_Xsan *xsan) {
 //
 // We need this because the decoder inlines a upb_Arena for performance but
 // the full struct is not visible outside of arena.c. Yes, I know, it's awful.
-#define UPB_ARENA_SIZE_HACK (9 + (UPB_XSAN_STRUCT_SIZE * 2))
+#define UPB_ARENA_SIZE_HACK (10 + (UPB_XSAN_STRUCT_SIZE * 2))
 
 // LINT.IfChange(upb_Arena)
 
@@ -1746,14 +1760,16 @@ UPB_API_INLINE void* upb_Array_MutableDataPtr(struct upb_Array* array) {
   return (void*)upb_Array_DataPtr(array);
 }
 
-UPB_INLINE struct upb_Array* UPB_PRIVATE(_upb_Array_New)(upb_Arena* arena,
-                                                         size_t init_capacity,
-                                                         int elem_size_lg2) {
+UPB_INLINE struct upb_Array* UPB_PRIVATE(_upb_Array_NewMaybeAllowSlow)(
+    upb_Arena* arena, size_t init_capacity, int elem_size_lg2,
+    bool allow_slow) {
   UPB_ASSERT(elem_size_lg2 != 1);
   UPB_ASSERT(elem_size_lg2 <= 4);
   const size_t array_size =
       UPB_ALIGN_UP(sizeof(struct upb_Array), UPB_MALLOC_ALIGN);
   const size_t bytes = array_size + (init_capacity << elem_size_lg2);
+  size_t span = UPB_PRIVATE(_upb_Arena_AllocSpan)(bytes);
+  if (!allow_slow && UPB_PRIVATE(_upb_ArenaHas)(arena) < span) return NULL;
   struct upb_Array* array = (struct upb_Array*)upb_Arena_Malloc(arena, bytes);
   if (!array) return NULL;
   UPB_PRIVATE(_upb_Array_SetTaggedPtr)
@@ -1763,9 +1779,34 @@ UPB_INLINE struct upb_Array* UPB_PRIVATE(_upb_Array_New)(upb_Arena* arena,
   return array;
 }
 
+UPB_INLINE struct upb_Array* UPB_PRIVATE(_upb_Array_New)(upb_Arena* arena,
+                                                         size_t init_capacity,
+                                                         int elem_size_lg2) {
+  return UPB_PRIVATE(_upb_Array_NewMaybeAllowSlow)(arena, init_capacity,
+                                                   elem_size_lg2, true);
+}
+
+UPB_INLINE struct upb_Array* UPB_PRIVATE(_upb_Array_TryFastNew)(
+    upb_Arena* arena, size_t init_capacity, int elem_size_lg2) {
+  return UPB_PRIVATE(_upb_Array_NewMaybeAllowSlow)(arena, init_capacity,
+                                                   elem_size_lg2, false);
+}
+
 // Resizes the capacity of the array to be at least min_size.
 bool UPB_PRIVATE(_upb_Array_Realloc)(struct upb_Array* array, size_t min_size,
                                      upb_Arena* arena);
+
+UPB_FORCEINLINE
+bool UPB_PRIVATE(_upb_Array_TryFastRealloc)(struct upb_Array* array,
+                                            size_t capacity, int elem_size_lg2,
+                                            upb_Arena* arena) {
+  size_t old_bytes = array->UPB_PRIVATE(capacity) << elem_size_lg2;
+  size_t new_bytes = capacity << elem_size_lg2;
+  UPB_ASSUME(new_bytes > old_bytes);
+  if (!upb_Arena_TryExtend(arena, array, old_bytes, new_bytes)) return false;
+  array->UPB_PRIVATE(capacity) = capacity;
+  return true;
+}
 
 UPB_API_INLINE bool upb_Array_Reserve(struct upb_Array* array, size_t size,
                                       upb_Arena* arena) {
@@ -1801,6 +1842,10 @@ UPB_INLINE void UPB_PRIVATE(_upb_Array_Set)(struct upb_Array* array, size_t i,
 
 UPB_API_INLINE size_t upb_Array_Size(const struct upb_Array* arr) {
   return arr->UPB_ONLYBITS(size);
+}
+
+UPB_API_INLINE size_t upb_Array_Capacity(const struct upb_Array* arr) {
+  return arr->UPB_PRIVATE(capacity);
 }
 
 // LINT.ThenChange(GoogleInternalName0)
@@ -2404,9 +2449,11 @@ UPB_API_INLINE const struct upb_MiniTable* upb_MiniTableSub_Message(
 
 struct upb_Decoder;
 struct upb_Message;
-typedef const char* _upb_FieldParser(struct upb_Decoder* d, const char* ptr,
-                                     struct upb_Message* msg, intptr_t table,
-                                     uint64_t hasbits, uint64_t data);
+
+typedef UPB_PRESERVE_NONE const char* _upb_FieldParser(
+    struct upb_Decoder* d, const char* ptr, struct upb_Message* msg,
+    intptr_t table, uint64_t hasbits, uint64_t data);
+
 typedef struct {
   uint64_t field_data;
   _upb_FieldParser* field_parser;
@@ -2448,9 +2495,9 @@ struct upb_MiniTable {
   const char* UPB_PRIVATE(full_name);
 #endif
 
-#ifndef __cplusplus
-  // Flexible array member is not supported in C++, but luckily C++ doesn't need
-  // to read or write the member.
+#if UPB_FASTTABLE || !defined(__cplusplus)
+  // Flexible array member is not supported in C++, but it is an extension in
+  // every compiler that supports UPB_FASTTABLE.
   _upb_FastTable_Entry UPB_PRIVATE(fasttable)[];
 #endif
 };
@@ -2727,6 +2774,9 @@ UPB_API upb_Array* upb_Array_New(upb_Arena* a, upb_CType type);
 
 // Returns the number of elements in the array.
 UPB_API_INLINE size_t upb_Array_Size(const upb_Array* arr);
+
+// Returns the number of elements in the array.
+UPB_API_INLINE size_t upb_Array_Capacity(const upb_Array* arr);
 
 // Returns the given element, which must be within the array's current size.
 UPB_API upb_MessageValue upb_Array_Get(const upb_Array* arr, size_t i);
@@ -4794,6 +4844,16 @@ UPB_API_INLINE void upb_Message_SetClosedEnum(struct upb_Message* msg,
 
 // Extension Setters ///////////////////////////////////////////////////////////
 
+UPB_API_INLINE bool upb_Message_SetExtensionMessage(
+    struct upb_Message* msg, const upb_MiniTableExtension* e,
+    struct upb_Message* value, upb_Arena* a) {
+  UPB_ASSERT(value);
+  UPB_ASSUME(upb_MiniTableExtension_CType(e) == kUpb_CType_Message);
+  UPB_ASSUME(UPB_PRIVATE(_upb_MiniTableExtension_GetRep)(e) ==
+             UPB_SIZE(kUpb_FieldRep_4Byte, kUpb_FieldRep_8Byte));
+  return upb_Message_SetExtension(msg, e, &value, a);
+}
+
 UPB_API_INLINE bool upb_Message_SetExtensionBool(
     struct upb_Message* msg, const upb_MiniTableExtension* e, bool value,
     upb_Arena* a) {
@@ -5507,6 +5567,10 @@ UPB_API_INLINE bool upb_Message_SetExtension(upb_Message* msg,
                                              const upb_MiniTableExtension* e,
                                              const void* value, upb_Arena* a);
 
+UPB_API_INLINE bool upb_Message_SetExtensionMessage(
+    struct upb_Message* msg, const upb_MiniTableExtension* e,
+    struct upb_Message* value, upb_Arena* a);
+
 UPB_API_INLINE bool upb_Message_SetExtensionBool(
     struct upb_Message* msg, const upb_MiniTableExtension* e, bool value,
     upb_Arena* a);
@@ -6174,6 +6238,12 @@ UPB_API upb_DecodeStatus upb_DecodeLengthPrefixed(
     const char* buf, size_t size, upb_Message* msg, size_t* num_bytes_read,
     const upb_MiniTable* mt, const upb_ExtensionRegistry* extreg, int options,
     upb_Arena* arena);
+
+// For testing: decode with tracing.
+UPB_API upb_DecodeStatus upb_DecodeWithTrace(
+    const char* buf, size_t size, upb_Message* msg, const upb_MiniTable* mt,
+    const upb_ExtensionRegistry* extreg, int options, upb_Arena* arena,
+    char* trace_buf, size_t trace_size);
 
 // Utility function for wrapper languages to get an error string from a
 // upb_DecodeStatus.
@@ -15486,8 +15556,66 @@ typedef struct upb_Decoder {
 #ifndef NDEBUG
   const char* debug_tagstart;
   const char* debug_valstart;
+  char* trace_ptr;
+  char* trace_end;
 #endif
 } upb_Decoder;
+
+UPB_INLINE const char* upb_Decoder_Init(upb_Decoder* d, const char* buf,
+                                        size_t size,
+                                        const upb_ExtensionRegistry* extreg,
+                                        int options, upb_Arena* arena,
+                                        char* trace_buf, size_t trace_size) {
+  upb_EpsCopyInputStream_Init(&d->input, &buf, size,
+                              options & kUpb_DecodeOption_AliasString);
+
+  d->extreg = extreg;
+  d->depth = upb_DecodeOptions_GetEffectiveMaxDepth(options);
+  d->end_group = DECODE_NOGROUP;
+  d->options = (uint16_t)options;
+  d->missing_required = false;
+  d->status = kUpb_DecodeStatus_Ok;
+  d->message_is_done = false;
+#ifndef NDEBUG
+  d->trace_ptr = trace_buf;
+  d->trace_end = UPB_PTRADD(trace_buf, trace_size);
+#endif
+  if (trace_buf) *trace_buf = 0;  // Null-terminate.
+
+  // Violating the encapsulation of the arena for performance reasons.
+  // This is a temporary arena that we swap into and swap out of when we are
+  // done.  The temporary arena only needs to be able to handle allocation,
+  // not fuse or free, so it does not need many of the members to be initialized
+  // (particularly parent_or_count).
+  UPB_PRIVATE(_upb_Arena_SwapIn)(&d->arena, arena);
+  return buf;
+}
+
+UPB_INLINE upb_DecodeStatus upb_Decoder_Destroy(upb_Decoder* d,
+                                                upb_Arena* arena) {
+  UPB_PRIVATE(_upb_Arena_SwapOut)(arena, &d->arena);
+  return d->status;
+}
+
+// Trace events are used to trace the progress of the decoder.
+// Events:
+//   'D'  Fast dispatch
+//   'F'  Field successfully parsed fast.
+//   '<'  Fallback to MiniTable parser.
+//   'M'  Field successfully parsed with MiniTable.
+//   'X'  Truncated -- trace buffer is full, further events were discarded.
+UPB_INLINE void _upb_Decoder_Trace(upb_Decoder* d, char event) {
+#ifndef NDEBUG
+  if (d->trace_ptr == NULL) return;
+  if (d->trace_ptr == d->trace_end - 1) {
+    d->trace_ptr[-1] = 'X';  // Truncated.
+    return;
+  }
+  d->trace_ptr[0] = event;
+  d->trace_ptr[1] = '\0';
+  d->trace_ptr++;
+#endif
+};
 
 /* Error function that will abort decoding with longjmp(). We can't declare this
  * UPB_NORETURN, even though it is appropriate, because if we do then compilers
@@ -15496,7 +15624,13 @@ typedef struct upb_Decoder {
  * of our optimizations. That is also why we must declare it in a separate file,
  * otherwise the compiler will see that it calls longjmp() and deduce that it is
  * noreturn. */
-const char* _upb_FastDecoder_ErrorJmp(upb_Decoder* d, int status);
+const char* _upb_FastDecoder_ErrorJmp2(upb_Decoder* d);
+
+UPB_INLINE
+const char* _upb_FastDecoder_ErrorJmp(upb_Decoder* d, upb_DecodeStatus status) {
+  d->status = status;
+  return _upb_FastDecoder_ErrorJmp2(d);
+}
 
 UPB_INLINE
 bool _upb_Decoder_VerifyUtf8Inline(const char* ptr, int len) {
@@ -15538,6 +15672,24 @@ UPB_INLINE const char* _upb_Decoder_BufferFlipCallback(
 
 
 #endif /* UPB_WIRE_INTERNAL_DECODER_H_ */
+#ifndef GOOGLE_UPB_UPB_WIRE_WRITER_H__
+#define GOOGLE_UPB_UPB_WIRE_WRITER_H__
+
+#include <stdint.h>
+
+// Must be last.
+
+UPB_FORCEINLINE uint32_t
+UPB_PRIVATE(upb_WireWriter_VarintUnusedSizeFromLeadingZeros64)(uint64_t clz) {
+  // Calculate how many bytes of the possible 10 bytes we will *not* encode,
+  // because they are part of a zero prefix. For the number 300, it would use 2
+  // bytes encoded, so the number of bytes to skip would be 8. Adding 7 to the
+  // clz input ensures that we're rounding up.
+  return (((uint32_t)clz + 7) * 9) >> 6;
+}
+
+
+#endif  // GOOGLE_UPB_UPB_WIRE_WRITER_H__
 /* This file was generated by upb_generator from the input file:
  *
  *     google/protobuf/descriptor.proto

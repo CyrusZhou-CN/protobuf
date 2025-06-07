@@ -14,8 +14,7 @@ load(
 )
 
 _stages = ["_stage0", "_stage1", ""]
-
-_protoc = "//:protoc_stage0"
+_protoc = "//src/google/protobuf/compiler/release:protoc_minimal"
 
 _extra_proto_path = "-I$$(dirname $(location //:descriptor_proto_srcs))/../.. "
 
@@ -84,6 +83,7 @@ def bootstrap_cc_binary(name, visibility = [], deps = [], bootstrap_deps = [], *
     for stage in _stages:
         native.cc_binary(
             name = name + stage,
+            malloc = "@bazel_tools//tools/cpp:malloc",
             deps = deps + [dep + stage for dep in bootstrap_deps],
             visibility = _stage_visibility(stage, visibility),
             **kwargs

@@ -491,7 +491,6 @@ set(libprotoc_srcs
   ${protobuf_SOURCE_DIR}/upb_generator/common.cc
   ${protobuf_SOURCE_DIR}/upb_generator/common/names.cc
   ${protobuf_SOURCE_DIR}/upb_generator/file_layout.cc
-  ${protobuf_SOURCE_DIR}/upb_generator/minitable/generator.cc
   ${protobuf_SOURCE_DIR}/upb_generator/minitable/names.cc
   ${protobuf_SOURCE_DIR}/upb_generator/minitable/names_internal.cc
   ${protobuf_SOURCE_DIR}/upb_generator/plugin.cc
@@ -633,7 +632,6 @@ set(libprotoc_hdrs
   ${protobuf_SOURCE_DIR}/upb_generator/common.h
   ${protobuf_SOURCE_DIR}/upb_generator/common/names.h
   ${protobuf_SOURCE_DIR}/upb_generator/file_layout.h
-  ${protobuf_SOURCE_DIR}/upb_generator/minitable/generator.h
   ${protobuf_SOURCE_DIR}/upb_generator/minitable/names.h
   ${protobuf_SOURCE_DIR}/upb_generator/minitable/names_internal.h
   ${protobuf_SOURCE_DIR}/upb_generator/plugin.h
@@ -826,6 +824,7 @@ set(libupb_hdrs
   ${protobuf_SOURCE_DIR}/upb/wire/internal/reader.h
   ${protobuf_SOURCE_DIR}/upb/wire/reader.h
   ${protobuf_SOURCE_DIR}/upb/wire/types.h
+  ${protobuf_SOURCE_DIR}/upb/wire/writer.h
 )
 
 # @//pkg:protoc-gen-upb
@@ -900,6 +899,41 @@ set(protoc-gen-upbdefs_hdrs
   ${protobuf_SOURCE_DIR}/upb_generator/plugin.h
   ${protobuf_SOURCE_DIR}/upb_generator/plugin_bootstrap.h
   ${protobuf_SOURCE_DIR}/upb_generator/reflection/names.h
+)
+
+# @//pkg:protoc-gen-upb_minitable
+set(protoc-gen-upb_minitable_srcs
+  ${protobuf_SOURCE_DIR}/src/google/protobuf/compiler/code_generator.cc
+  ${protobuf_SOURCE_DIR}/src/google/protobuf/compiler/code_generator_lite.cc
+  ${protobuf_SOURCE_DIR}/src/google/protobuf/compiler/plugin.cc
+  ${protobuf_SOURCE_DIR}/src/google/protobuf/compiler/plugin.pb.cc
+  ${protobuf_SOURCE_DIR}/src/google/protobuf/compiler/retention.cc
+  ${protobuf_SOURCE_DIR}/upb_generator/common.cc
+  ${protobuf_SOURCE_DIR}/upb_generator/common/names.cc
+  ${protobuf_SOURCE_DIR}/upb_generator/file_layout.cc
+  ${protobuf_SOURCE_DIR}/upb_generator/minitable/generator.cc
+  ${protobuf_SOURCE_DIR}/upb_generator/minitable/main.cc
+  ${protobuf_SOURCE_DIR}/upb_generator/minitable/names.cc
+  ${protobuf_SOURCE_DIR}/upb_generator/minitable/names_internal.cc
+  ${protobuf_SOURCE_DIR}/upb_generator/plugin.cc
+)
+
+# @//pkg:protoc-gen-upb_minitable
+set(protoc-gen-upb_minitable_hdrs
+  ${protobuf_SOURCE_DIR}/src/google/protobuf/compiler/code_generator.h
+  ${protobuf_SOURCE_DIR}/src/google/protobuf/compiler/code_generator_lite.h
+  ${protobuf_SOURCE_DIR}/src/google/protobuf/compiler/plugin.h
+  ${protobuf_SOURCE_DIR}/src/google/protobuf/compiler/plugin.pb.h
+  ${protobuf_SOURCE_DIR}/src/google/protobuf/compiler/retention.h
+  ${protobuf_SOURCE_DIR}/src/google/protobuf/compiler/scc.h
+  ${protobuf_SOURCE_DIR}/upb_generator/common.h
+  ${protobuf_SOURCE_DIR}/upb_generator/common/names.h
+  ${protobuf_SOURCE_DIR}/upb_generator/file_layout.h
+  ${protobuf_SOURCE_DIR}/upb_generator/minitable/generator.h
+  ${protobuf_SOURCE_DIR}/upb_generator/minitable/names.h
+  ${protobuf_SOURCE_DIR}/upb_generator/minitable/names_internal.h
+  ${protobuf_SOURCE_DIR}/upb_generator/plugin.h
+  ${protobuf_SOURCE_DIR}/upb_generator/plugin_bootstrap.h
 )
 
 # @//src/google/protobuf:well_known_type_protos
@@ -1076,6 +1110,7 @@ set(test_util_hdrs
 # @//pkg:upb_test_util
 set(upb_test_util_srcs
   ${protobuf_SOURCE_DIR}/upb/test/fuzz_util.cc
+  ${protobuf_SOURCE_DIR}/upb/wire/test_util/make_mini_table.cc
   ${protobuf_SOURCE_DIR}/upb/wire/test_util/wire_message.cc
 )
 
@@ -1084,6 +1119,8 @@ set(upb_test_util_hdrs
   ${protobuf_SOURCE_DIR}/upb/test/fuzz_util.h
   ${protobuf_SOURCE_DIR}/upb/test/parse_text_proto.h
   ${protobuf_SOURCE_DIR}/upb/util/def_to_proto_test.h
+  ${protobuf_SOURCE_DIR}/upb/wire/test_util/field_types.h
+  ${protobuf_SOURCE_DIR}/upb/wire/test_util/make_mini_table.h
   ${protobuf_SOURCE_DIR}/upb/wire/test_util/wire_message.h
 )
 
@@ -1177,6 +1214,7 @@ set(upb_test_files
   ${protobuf_SOURCE_DIR}/upb/util/def_to_proto_test.cc
   ${protobuf_SOURCE_DIR}/upb/util/required_fields_test.cc
   ${protobuf_SOURCE_DIR}/upb/wire/byte_size_test.cc
+  ${protobuf_SOURCE_DIR}/upb/wire/decode_test.cc
   ${protobuf_SOURCE_DIR}/upb/wire/eps_copy_input_stream_test.cc
 )
 

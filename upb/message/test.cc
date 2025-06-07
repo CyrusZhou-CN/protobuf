@@ -5,6 +5,7 @@
 // license that can be found in the LICENSE file or at
 // https://developers.google.com/open-source/licenses/bsd
 
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
@@ -52,6 +53,7 @@
 #include "upb/wire/encode.h"
 #include "upb/wire/eps_copy_input_stream.h"
 #include "upb/wire/types.h"
+#include "upb/wire/writer.h"
 
 // Must be last
 #include "upb/port/def.inc"
@@ -733,7 +735,6 @@ TEST(MessageTest, AdjacentAliasedUnknown) {
   const upb_MiniTable* table = UPB_PRIVATE(_upb_MiniTable_Empty)();
   upb::Arena arena;
   upb_Message* msg = upb_Message_New(table, arena.ptr());
-  memset(msg, 0, sizeof(*msg));
   char region[900];
   memset(region, 0, sizeof(region));
   region[0] = 0x0A;  // Tag number 1
@@ -858,4 +859,41 @@ TEST(MessageTest, Freeze) {
     ASSERT_TRUE(upb_Map_IsFrozen(map));
     ASSERT_TRUE(upb_Message_IsFrozen(UPB_UPCAST(nest)));
   }
+}
+
+/* Tests some somewhat tricky math used in size calculations while encoding */
+TEST(MessageTest, SkippedVarintSize) {
+  for (uint32_t clz = 0; clz <= 64; clz++) {
+    // Optimized math used in encoding
+    uint32_t skip =
+        UPB_PRIVATE(upb_WireWriter_VarintUnusedSizeFromLeadingZeros64)(clz);
+    // traditional varint size calculation
+    uint64_t val = clz == 64 ? 0 : (~uint64_t{0} >> clz);
+    uint32_t count = 0;
+    do {
+      count++;
+      val >>= 7;
+    } while (val);
+    EXPECT_EQ(skip, 10 - count);
+  }
+}
+
+TEST(MessageTest, ArenaSpaceAllocatedAfterDecode) {
+  const upb_MiniTable* table = UPB_PRIVATE(_upb_MiniTable_Empty)();
+  upb::Arena arena(table->UPB_PRIVATE(size));
+
+  uintptr_t space_allocated_before =
+      upb_Arena_SpaceAllocated(arena.ptr(), nullptr);
+  upb_Message* msg = upb_Message_New(table, arena.ptr());
+  char region[300];
+  memset(region, 0, sizeof(region));
+  region[0] = 0x0A;  // Tag number 1
+  region[1] = 0xA9;
+  region[2] = 0x02;
+  upb_DecodeStatus status =
+      upb_Decode(region, sizeof(region), msg, table, nullptr, 0, arena.ptr());
+  EXPECT_EQ(status, kUpb_DecodeStatus_Ok);
+  uintptr_t space_allocated_after =
+      upb_Arena_SpaceAllocated(arena.ptr(), nullptr);
+  EXPECT_GT(space_allocated_after, space_allocated_before + 297);
 }

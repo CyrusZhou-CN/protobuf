@@ -346,6 +346,12 @@ Error, UINTPTR_MAX is undefined
 #define UPB_MUSTTAIL
 #endif
 
+#if UPB_HAS_ATTRIBUTE(preserve_none)
+#define UPB_PRESERVE_NONE __attribute__((preserve_none))
+#else
+#define UPB_PRESERVE_NONE
+#endif
+
 /* This check is not fully robust: it does not require that we have "musttail"
  * support available. We need tail calls to avoid consuming arbitrary amounts
  * of stack space.
@@ -2941,6 +2947,8 @@ static void* upb_global_allocfunc(upb_alloc* alloc, void* ptr, size_t oldsize,
 upb_alloc upb_alloc_global = {&upb_global_allocfunc};
 
 
+#include <string.h>
+
 
 #ifdef UPB_TRACING_ENABLED
 #include <stdatomic.h>
@@ -2960,9 +2968,8 @@ void upb_Arena_SetMaxBlockSize(size_t max) {
 
 typedef struct upb_MemBlock {
   struct upb_MemBlock* next;
-  // If this block is the head of the list, tracks a growing hint of what the
-  // *next* block should be; otherwise tracks the size of the actual allocation.
-  size_t size_or_hint;
+  // Size of the actual allocation.
+  size_t size;
   // Data follows.
 } upb_MemBlock;
 
@@ -2970,6 +2977,18 @@ typedef struct upb_ArenaInternal {
   // upb_alloc* together with a low bit which signals if there is an initial
   // block.
   uintptr_t block_alloc;
+
+  // Linked list of blocks to free/cleanup.
+  upb_MemBlock* blocks;
+
+  // A growing hint of what the *next* block should be sized
+  size_t size_hint;
+
+  // All non atomic members used during allocation must be above this point, and
+  // are used by _SwapIn/_SwapOut
+
+  // Total space allocated in blocks, atomic only for SpaceAllocated
+  UPB_ATOMIC(uintptr_t) space_allocated;
 
   // The cleanup for the allocator. This is called after all the blocks are
   // freed in an arena.
@@ -2997,12 +3016,6 @@ typedef struct upb_ArenaInternal {
   //   such that a->previous_or_tail->next == a.
   UPB_ATOMIC(uintptr_t) previous_or_tail;
 
-  // Linked list of blocks to free/cleanup.
-  upb_MemBlock* blocks;
-
-  // Total space allocated in blocks, atomic only for SpaceAllocated
-  UPB_ATOMIC(uintptr_t) space_allocated;
-
   // We use a different UPB_XSAN_MEMBER than the one in upb_Arena because the
   // two are distinct synchronization domains.  The upb_Arena.ptr member is
   // not published in the allocation path, so it is not synchronized with
@@ -3029,12 +3042,6 @@ static const size_t kUpb_MemblockReserve =
 // Extracts the (upb_ArenaInternal*) from a (upb_Arena*)
 static upb_ArenaInternal* upb_Arena_Internal(const upb_Arena* a) {
   return &((upb_ArenaState*)a)->body;
-}
-
-// Extracts the (upb_Arena*) from a (upb_ArenaInternal*)
-static upb_Arena* upb_Arena_FromInternal(const upb_ArenaInternal* ai) {
-  ptrdiff_t offset = -offsetof(upb_ArenaState, body);
-  return UPB_PTR_AT(ai, offset, upb_Arena);
 }
 
 static bool _upb_Arena_IsTaggedRefcount(uintptr_t parent_or_count) {
@@ -3237,14 +3244,10 @@ static void _upb_Arena_AddBlock(upb_Arena* a, void* ptr, size_t offset,
   upb_ArenaInternal* ai = upb_Arena_Internal(a);
   upb_MemBlock* block = ptr;
 
-  block->size_or_hint = block_size;
+  block->size = block_size;
   UPB_ASSERT(offset >= kUpb_MemblockReserve);
   char* start = UPB_PTR_AT(block, offset, char);
   upb_MemBlock* head = ai->blocks;
-  if (head && head->next) {
-    // Fix up size to match actual allocation size
-    head->size_or_hint = a->UPB_PRIVATE(end) - (char*)head;
-  }
   block->next = head;
   ai->blocks = block;
   UPB_PRIVATE(upb_Xsan_Init)(UPB_XSAN(a));
@@ -3263,7 +3266,7 @@ void* UPB_PRIVATE(_upb_Arena_SlowMalloc)(upb_Arena* a, size_t size) {
   size_t current_free = 0;
   upb_MemBlock* last_block = ai->blocks;
   if (last_block) {
-    last_size = a->UPB_PRIVATE(end) - (char*)last_block;
+    last_size = last_block->size;
     current_free = a->UPB_PRIVATE(end) - a->UPB_PRIVATE(ptr);
   }
 
@@ -3280,7 +3283,7 @@ void* UPB_PRIVATE(_upb_Arena_SlowMalloc)(upb_Arena* a, size_t size) {
   // allocations, allocate blocks that would net reduce free space behind it.
   if (last_block && current_free > future_free &&
       target_size < max_block_size) {
-    last_size = last_block->size_or_hint;
+    last_size = ai->size_hint;
     // Recalculate sizes with possibly larger last_size
     target_size = UPB_MIN(last_size * 2, max_block_size);
     future_free = UPB_MAX(size, target_size - kUpb_MemblockReserve) - size;
@@ -3299,8 +3302,7 @@ void* UPB_PRIVATE(_upb_Arena_SlowMalloc)(upb_Arena* a, size_t size) {
     // will reach the max block size. Allocations larger than the max block size
     // will always get their own backing allocation, so don't include them.
     if (target_size <= max_block_size) {
-      last_block->size_or_hint =
-          UPB_MIN(last_block->size_or_hint + (size >> 1), max_block_size >> 1);
+      ai->size_hint = UPB_MIN(ai->size_hint + (size >> 1), max_block_size >> 1);
     }
   }
   // We may need to exceed the max block size if the user requested a large
@@ -3326,7 +3328,7 @@ void* UPB_PRIVATE(_upb_Arena_SlowMalloc)(upb_Arena* a, size_t size) {
                    memory_order_relaxed);
   if (UPB_UNLIKELY(insert_after_head)) {
     upb_ArenaInternal* ai = upb_Arena_Internal(a);
-    block->size_or_hint = actual_block_size;
+    block->size = actual_block_size;
     upb_MemBlock* head = ai->blocks;
     block->next = head->next;
     head->next = block;
@@ -3336,6 +3338,7 @@ void* UPB_PRIVATE(_upb_Arena_SlowMalloc)(upb_Arena* a, size_t size) {
                                        UPB_PRIVATE(kUpb_Asan_GuardSize));
     return allocated;
   } else {
+    ai->size_hint = actual_block_size;
     _upb_Arena_AddBlock(a, block, kUpb_MemblockReserve, actual_block_size);
     UPB_ASSERT(UPB_PRIVATE(_upb_ArenaHas)(a) >= size);
     return upb_Arena_Malloc(a, size - UPB_PRIVATE(kUpb_Asan_GuardSize));
@@ -3361,8 +3364,8 @@ static upb_Arena* _upb_Arena_InitSlow(upb_alloc* alloc, size_t first_size) {
   size_t actual_block_size = alloc_result.n;
 
   a = UPB_PTR_AT(mem, kUpb_MemblockReserve, upb_ArenaState);
-
   a->body.block_alloc = _upb_Arena_MakeBlockAlloc(alloc, 0);
+  a->body.size_hint = actual_block_size;
   upb_Atomic_Init(&a->body.parent_or_count, _upb_Arena_TaggedFromRefcount(1));
   upb_Atomic_Init(&a->body.next, NULL);
   upb_Atomic_Init(&a->body.previous_or_tail,
@@ -3404,6 +3407,7 @@ upb_Arena* upb_Arena_Init(void* mem, size_t n, upb_alloc* alloc) {
                   _upb_Arena_TaggedFromTail(&a->body));
   upb_Atomic_Init(&a->body.space_allocated, 0);
   a->body.blocks = NULL;
+  a->body.size_hint = 128;
   a->body.upb_alloc_cleanup = NULL;
   a->body.block_alloc = _upb_Arena_MakeBlockAlloc(alloc, 1);
   a->head.UPB_PRIVATE(ptr) = (void*)UPB_ALIGN_MALLOC((uintptr_t)(a + 1));
@@ -3431,15 +3435,11 @@ static void _upb_Arena_DoFree(upb_ArenaInternal* ai) {
     }
     upb_alloc* block_alloc = _upb_ArenaInternal_BlockAlloc(ai);
     upb_MemBlock* block = ai->blocks;
-    if (block && block->next) {
-      block->size_or_hint =
-          upb_Arena_FromInternal(ai)->UPB_PRIVATE(end) - (char*)block;
-    }
     upb_AllocCleanupFunc* alloc_cleanup = *ai->upb_alloc_cleanup;
     while (block != NULL) {
       // Load first since we are deleting block.
       upb_MemBlock* next_block = block->next;
-      upb_free_sized(block_alloc, block, block->size_or_hint);
+      upb_free_sized(block_alloc, block, block->size);
       block = next_block;
     }
     if (alloc_cleanup != NULL) {
@@ -3770,20 +3770,17 @@ upb_alloc* upb_Arena_GetUpbAlloc(upb_Arena* a) {
 }
 
 void UPB_PRIVATE(_upb_Arena_SwapIn)(upb_Arena* des, const upb_Arena* src) {
+  memcpy(des, src, offsetof(upb_ArenaState, body.space_allocated));
   upb_ArenaInternal* desi = upb_Arena_Internal(des);
   upb_ArenaInternal* srci = upb_Arena_Internal(src);
-
-  *des = *src;
-  desi->block_alloc = srci->block_alloc;
-  desi->blocks = srci->blocks;
+  uintptr_t new_space_allocated =
+      upb_Atomic_Load(&srci->space_allocated, memory_order_relaxed);
+  upb_Atomic_Store(&desi->space_allocated, new_space_allocated,
+                   memory_order_relaxed);
 }
 
 void UPB_PRIVATE(_upb_Arena_SwapOut)(upb_Arena* des, const upb_Arena* src) {
-  upb_ArenaInternal* desi = upb_Arena_Internal(des);
-  upb_ArenaInternal* srci = upb_Arena_Internal(src);
-
-  *des = *src;
-  desi->blocks = srci->blocks;
+  UPB_PRIVATE(_upb_Arena_SwapIn)(des, src);
 }
 
 bool _upb_Arena_WasLastAlloc(struct upb_Arena* a, void* ptr, size_t oldsize) {
@@ -3795,7 +3792,7 @@ bool _upb_Arena_WasLastAlloc(struct upb_Arena* a, void* ptr, size_t oldsize) {
   char* start = UPB_PTR_AT(block, kUpb_MemblockReserve, char);
   return UPB_PRIVATE(upb_Xsan_PtrEq)(ptr, start) &&
          UPB_PRIVATE(_upb_Arena_AllocSpan)(oldsize) ==
-             block->size_or_hint - kUpb_MemblockReserve;
+             block->size - kUpb_MemblockReserve;
 }
 
 
@@ -6000,15 +5997,21 @@ static const char* upb_MtDecoder_ParseModifier(upb_MtDecoder* d,
   return ptr;
 }
 
+static void* upb_MtDecoder_CheckedMalloc(upb_MtDecoder* d, size_t size) {
+  void* ptr = upb_Arena_Malloc(d->arena, size);
+  upb_MdDecoder_CheckOutOfMemory(&d->base, ptr);
+  return ptr;
+}
+
 static void upb_MtDecoder_AllocateSubs(upb_MtDecoder* d,
                                        upb_SubCounts sub_counts) {
   uint32_t total_count = sub_counts.submsg_count + sub_counts.subenum_count;
   size_t subs_bytes = sizeof(*d->table.UPB_PRIVATE(subs)) * total_count;
   size_t ptrs_bytes = sizeof(upb_MiniTable*) * sub_counts.submsg_count;
-  upb_MiniTableSubInternal* subs = upb_Arena_Malloc(d->arena, subs_bytes);
-  const upb_MiniTable** subs_ptrs = upb_Arena_Malloc(d->arena, ptrs_bytes);
-  upb_MdDecoder_CheckOutOfMemory(&d->base, subs);
-  upb_MdDecoder_CheckOutOfMemory(&d->base, subs_ptrs);
+  upb_MiniTableSubInternal* subs =
+      subs_bytes ? upb_MtDecoder_CheckedMalloc(d, subs_bytes) : NULL;
+  const upb_MiniTable** subs_ptrs =
+      ptrs_bytes ? upb_MtDecoder_CheckedMalloc(d, ptrs_bytes) : NULL;
   uint32_t i = 0;
   for (; i < sub_counts.submsg_count; i++) {
     subs_ptrs[i] = UPB_PRIVATE(_upb_MiniTable_Empty)();
@@ -6959,9 +6962,7 @@ UPB_NORETURN static void* _upb_Decoder_ErrorJmp(upb_Decoder* d,
   UPB_LONGJMP(d->err, 1);
 }
 
-const char* _upb_FastDecoder_ErrorJmp(upb_Decoder* d, int status) {
-  UPB_ASSERT(status != kUpb_DecodeStatus_Ok);
-  d->status = status;
+const char* _upb_FastDecoder_ErrorJmp2(upb_Decoder* d) {
   UPB_LONGJMP(d->err, 1);
   return NULL;
 }
@@ -6989,19 +6990,34 @@ typedef struct {
 
 UPB_NOINLINE
 static _upb_DecodeLongVarintReturn _upb_Decoder_DecodeLongVarint(
-    const char* ptr, uint64_t val) {
-  _upb_DecodeLongVarintReturn ret = {NULL, 0};
+    const char* ptr, uint64_t val, upb_Decoder* d) {
   uint64_t byte;
   for (int i = 1; i < 10; i++) {
     byte = (uint8_t)ptr[i];
     val += (byte - 1) << (i * 7);
     if (!(byte & 0x80)) {
-      ret.ptr = ptr + i + 1;
-      ret.val = val;
-      return ret;
+      return (_upb_DecodeLongVarintReturn){.ptr = ptr + i + 1, .val = val};
     }
   }
-  return ret;
+  _upb_Decoder_ErrorJmp(d, kUpb_DecodeStatus_Malformed);
+}
+
+UPB_NOINLINE
+static _upb_DecodeLongVarintReturn _upb_Decoder_DecodeLongTag(const char* ptr,
+                                                              uint64_t val,
+                                                              upb_Decoder* d) {
+  uint64_t byte;
+  for (int i = 1; i < 5; i++) {
+    byte = (uint8_t)ptr[i];
+    val += (byte - 1) << (i * 7);
+    if (!(byte & 0x80)) {
+      if (val > UINT32_MAX) {
+        break;
+      }
+      return (_upb_DecodeLongVarintReturn){.ptr = ptr + i + 1, .val = val};
+    }
+  }
+  _upb_Decoder_ErrorJmp(d, kUpb_DecodeStatus_Malformed);
 }
 
 UPB_FORCEINLINE
@@ -7012,8 +7028,8 @@ const char* _upb_Decoder_DecodeVarint(upb_Decoder* d, const char* ptr,
     *val = byte;
     return ptr + 1;
   } else {
-    _upb_DecodeLongVarintReturn res = _upb_Decoder_DecodeLongVarint(ptr, byte);
-    if (!res.ptr) _upb_Decoder_ErrorJmp(d, kUpb_DecodeStatus_Malformed);
+    _upb_DecodeLongVarintReturn res =
+        _upb_Decoder_DecodeLongVarint(ptr, byte, d);
     *val = res.val;
     return res.ptr;
   }
@@ -7027,11 +7043,7 @@ const char* _upb_Decoder_DecodeTag(upb_Decoder* d, const char* ptr,
     *val = byte;
     return ptr + 1;
   } else {
-    const char* start = ptr;
-    _upb_DecodeLongVarintReturn res = _upb_Decoder_DecodeLongVarint(ptr, byte);
-    if (!res.ptr || res.ptr - start > 5 || res.val > UINT32_MAX) {
-      _upb_Decoder_ErrorJmp(d, kUpb_DecodeStatus_Malformed);
-    }
+    _upb_DecodeLongVarintReturn res = _upb_Decoder_DecodeLongTag(ptr, byte, d);
     *val = res.val;
     return res.ptr;
   }
@@ -8166,24 +8178,28 @@ const char* _upb_Decoder_DecodeFieldNoFast(upb_Decoder* d, const char* ptr,
     return _upb_Decoder_EndMessage(d, ptr);
   }
 
-  return _upb_Decoder_DecodeFieldData(d, ptr, msg, mt, field_number, wire_type);
+  ptr = _upb_Decoder_DecodeFieldData(d, ptr, msg, mt, field_number, wire_type);
+  _upb_Decoder_Trace(d, 'M');
+  return ptr;
 }
 
 UPB_FORCEINLINE
 const char* _upb_Decoder_DecodeField(upb_Decoder* d, const char* ptr,
                                      upb_Message* msg, const upb_MiniTable* mt,
                                      uint64_t last_field_index, uint64_t data) {
-  if (_upb_Decoder_IsDone(d, &ptr)) {
-    return _upb_Decoder_EndMessage(d, ptr);
-  }
-
-#if UPB_FASTTABLE
+#ifdef UPB_ENABLE_FASTTABLE
   if (mt && mt->UPB_PRIVATE(table_mask) != (unsigned char)-1 &&
       !(d->options & kUpb_DecodeOption_DisableFastTable)) {
-    uint16_t tag = _upb_FastDecoder_LoadTag(ptr);
     intptr_t table = decode_totable(mt);
-    ptr = _upb_FastDecoder_TagDispatch(d, ptr, msg, table, 0, tag);
+    ptr = upb_DecodeFast_Dispatch(d, ptr, msg, table, 0, 0);
     if (d->message_is_done) return ptr;
+    _upb_Decoder_Trace(d, '<');
+  } else if (_upb_Decoder_IsDone(d, &ptr)) {
+    return _upb_Decoder_EndMessage(d, ptr);
+  }
+#else
+  if (_upb_Decoder_IsDone(d, &ptr)) {
+    return _upb_Decoder_EndMessage(d, ptr);
   }
 #endif
 
@@ -8234,9 +8250,7 @@ static upb_DecodeStatus upb_Decoder_Decode(upb_Decoder* const decoder,
     UPB_ASSERT(decoder->status != kUpb_DecodeStatus_Ok);
   }
 
-  UPB_PRIVATE(_upb_Arena_SwapOut)(arena, &decoder->arena);
-
-  return decoder->status;
+  return upb_Decoder_Destroy(decoder, arena);
 }
 
 static uint16_t upb_DecodeOptions_GetMaxDepth(uint32_t options) {
@@ -8254,24 +8268,20 @@ upb_DecodeStatus upb_Decode(const char* buf, size_t size, upb_Message* msg,
                             upb_Arena* arena) {
   UPB_ASSERT(!upb_Message_IsFrozen(msg));
   upb_Decoder decoder;
+  buf = upb_Decoder_Init(&decoder, buf, size, extreg, options, arena, NULL, 0);
 
-  upb_EpsCopyInputStream_Init(&decoder.input, &buf, size,
-                              options & kUpb_DecodeOption_AliasString);
+  return upb_Decoder_Decode(&decoder, buf, msg, mt, arena);
+}
 
-  decoder.extreg = extreg;
-  decoder.depth = upb_DecodeOptions_GetEffectiveMaxDepth(options);
-  decoder.end_group = DECODE_NOGROUP;
-  decoder.options = (uint16_t)options;
-  decoder.missing_required = false;
-  decoder.status = kUpb_DecodeStatus_Ok;
-  decoder.message_is_done = false;
-
-  // Violating the encapsulation of the arena for performance reasons.
-  // This is a temporary arena that we swap into and swap out of when we are
-  // done.  The temporary arena only needs to be able to handle allocation,
-  // not fuse or free, so it does not need many of the members to be initialized
-  // (particularly parent_or_count).
-  UPB_PRIVATE(_upb_Arena_SwapIn)(&decoder.arena, arena);
+upb_DecodeStatus upb_DecodeWithTrace(const char* buf, size_t size,
+                                     upb_Message* msg, const upb_MiniTable* mt,
+                                     const upb_ExtensionRegistry* extreg,
+                                     int options, upb_Arena* arena,
+                                     char* trace_buf, size_t trace_size) {
+  UPB_ASSERT(!upb_Message_IsFrozen(msg));
+  upb_Decoder decoder;
+  buf = upb_Decoder_Init(&decoder, buf, size, extreg, options, arena, trace_buf,
+                         trace_size);
 
   return upb_Decoder_Decode(&decoder, buf, msg, mt, arena);
 }
@@ -8441,6 +8451,64 @@ static char* encode_fixed32(char* ptr, upb_encstate* e, uint32_t val) {
 
 #define UPB_PB_VARINT_MAX_LEN 10
 
+// Need gnu extended inline asm
+#if defined(__aarch64__) && (defined(__GNUC__) || defined(__clang__))
+#define UPB_ARM64_ASM
+#endif
+
+#ifdef UPB_ARM64_ASM
+UPB_NOINLINE static char* encode_longvarint_arm64(char* ptr, upb_encstate* e,
+                                                  uint64_t val) {
+  ptr = encode_reserve(ptr, e, UPB_PB_VARINT_MAX_LEN);
+  uint64_t clz;
+  __asm__("clz %[cnt], %[val]\n" : [cnt] "=r"(clz) : [val] "r"(val));
+
+  uint32_t skip =
+      UPB_PRIVATE(upb_WireWriter_VarintUnusedSizeFromLeadingZeros64)(clz);
+
+  ptr += skip;
+  uint64_t addr, mask;
+  __asm__ volatile(
+      "adr %[addr], 0f\n"
+      // Each arm64 instruction encodes to 4 bytes, and it takes two
+      // intructions to process each byte of output, so we branch ahead by
+      //  (4 + 4) * skip to avoid the remaining bytes.
+      "add %[addr], %[addr], %[cnt], lsl #3\n"
+      "mov %w[mask], #0x80\n"
+      "br %[addr]\n"
+      "0:\n"
+      // We don't need addr any more, but we've got the register for our whole
+      // assembly block so we'll use it as scratch to store the shift+masked
+      // values before storing them.
+      // The following stores are unsigned offset stores:
+      // strb Wt, [Xn, #imm]
+      "orr %[addr], %[mask], %[val], lsr #56\n"
+      "strb %w[addr], [%[ptr], #8]\n"
+      "orr %[addr], %[mask], %[val], lsr #49\n"
+      "strb %w[addr], [%[ptr], #7]\n"
+      "orr %[addr], %[mask], %[val], lsr #42\n"
+      "strb %w[addr], [%[ptr], #6]\n"
+      "orr %[addr], %[mask], %[val], lsr #35\n"
+      "strb %w[addr], [%[ptr], #5]\n"
+      "orr %[addr], %[mask], %[val], lsr #28\n"
+      "strb %w[addr], [%[ptr], #4]\n"
+      "orr %w[addr], %w[mask], %w[val], lsr #21\n"
+      "strb %w[addr], [%[ptr], #3]\n"
+      "orr %w[addr], %w[mask], %w[val], lsr #14\n"
+      "strb %w[addr], [%[ptr], #2]\n"
+      "orr %w[addr], %w[mask], %w[val], lsr #7\n"
+      "strb %w[addr], [%[ptr], #1]\n"
+      "orr %w[addr], %w[val], #0x80\n"
+      "strb %w[addr], [%[ptr]]\n"
+      : [addr] "=&r"(addr), [mask] "=&r"(mask)
+      : [val] "r"(val), [ptr] "r"(ptr), [cnt] "r"((uint64_t)skip)
+      : "memory");
+  // Encode the final byte after the continuation bytes.
+  uint32_t continuations = UPB_PB_VARINT_MAX_LEN - 1 - skip;
+  ptr[continuations] = val >> (7 * continuations);
+  return ptr;
+}
+#else
 UPB_NOINLINE
 static char* encode_longvarint(char* ptr, upb_encstate* e, uint64_t val) {
   ptr = encode_reserve(ptr, e, UPB_PB_VARINT_MAX_LEN);
@@ -8455,6 +8523,7 @@ static char* encode_longvarint(char* ptr, upb_encstate* e, uint64_t val) {
   memmove(start, ptr, len);
   return start;
 }
+#endif
 
 UPB_FORCEINLINE
 char* encode_varint(char* ptr, upb_encstate* e, uint64_t val) {
@@ -8463,7 +8532,11 @@ char* encode_varint(char* ptr, upb_encstate* e, uint64_t val) {
     *ptr = val;
     return ptr;
   } else {
+#ifdef UPB_ARM64_ASM
+    return encode_longvarint_arm64(ptr, e, val);
+#else
     return encode_longvarint(ptr, e, val);
+#endif
   }
 }
 
@@ -9723,10 +9796,20 @@ static const upb_MiniTableField google_protobuf_UninterpretedOption__fields[7] =
 const upb_MiniTable google__protobuf__UninterpretedOption_msg_init = {
   &google_protobuf_UninterpretedOption__submsgs[0],
   &google_protobuf_UninterpretedOption__fields[0],
-  UPB_SIZE(64, 96), 7, kUpb_ExtMode_NonExtendable, 0, UPB_FASTTABLE_MASK(255), 0,
+  UPB_SIZE(64, 96), 7, kUpb_ExtMode_NonExtendable, 0, UPB_FASTTABLE_MASK(56), 0,
 #ifdef UPB_TRACING_ENABLED
   "google.protobuf.UninterpretedOption",
 #endif
+  UPB_FASTTABLE_INIT({
+    {0x0000000000000000, &_upb_FastDecoder_DecodeGeneric},
+    {0x0000000000000000, &_upb_FastDecoder_DecodeGeneric},
+    {0x0000000000000000, &_upb_FastDecoder_DecodeGeneric},
+    {0x0000000000000000, &_upb_FastDecoder_DecodeGeneric},
+    {0x0000000000000000, &_upb_FastDecoder_DecodeGeneric},
+    {0x0000000000000000, &_upb_FastDecoder_DecodeGeneric},
+    {0x0058000003000031, &upb_DecodeFast_Fixed64_Scalar_Tag1Byte},
+    {0x0000000000000000, &_upb_FastDecoder_DecodeGeneric},
+  })
 };
 
 const upb_MiniTable* google__protobuf__UninterpretedOption_msg_init_ptr = &google__protobuf__UninterpretedOption_msg_init;
