@@ -11,9 +11,15 @@
 
 #include "google/protobuf/reflection_ops.h"
 
+#include <cstdint>
+#include <string>
+#include <utility>
+#include <vector>
+
 #include <gtest/gtest.h>
 #include "absl/strings/str_join.h"
 #include "google/protobuf/descriptor.h"
+#include "google/protobuf/generated_message_util.h"
 #include "google/protobuf/test_util.h"
 #include "google/protobuf/unittest.pb.h"
 #include "google/protobuf/unittest_import.pb.h"
@@ -436,6 +442,39 @@ TEST(ReflectionOpsTest, OneofIsInitialized) {
   EXPECT_TRUE(ReflectionOps::IsInitialized(message, true, false));
   EXPECT_FALSE(ReflectionOps::IsInitialized(message, false, true));
   message.mutable_foo_message()->set_required_double(0.1);
+  EXPECT_TRUE(ReflectionOps::IsInitialized(message));
+  EXPECT_TRUE(ReflectionOps::IsInitialized(message, true, false));
+  EXPECT_TRUE(ReflectionOps::IsInitialized(message, false, true));
+}
+
+TEST(ReflectionOpsTest, MapIsInitialized) {
+  unittest::TestRequired message;
+  message.set_a(1);
+  message.set_b(2);
+  message.set_c(3);
+  EXPECT_TRUE(ReflectionOps::IsInitialized(message));
+  EXPECT_TRUE(ReflectionOps::IsInitialized(message, true, false));
+  EXPECT_TRUE(ReflectionOps::IsInitialized(message, false, true));
+
+  message.mutable_map_field();
+  EXPECT_TRUE(ReflectionOps::IsInitialized(message));
+  EXPECT_TRUE(ReflectionOps::IsInitialized(message, true, false));
+  EXPECT_TRUE(ReflectionOps::IsInitialized(message, false, true));
+
+  {
+    unittest::TestRequired sub_message;
+    message.mutable_map_field()->insert({"key", std::move(sub_message)});
+  }
+  EXPECT_FALSE(ReflectionOps::IsInitialized(message));
+  EXPECT_TRUE(ReflectionOps::IsInitialized(message, true, false));
+  EXPECT_FALSE(ReflectionOps::IsInitialized(message, false, true));
+
+  {
+    auto& sub_message = message.mutable_map_field()->at("key");
+    sub_message.set_a(1);
+    sub_message.set_b(2);
+    sub_message.set_c(3);
+  }
   EXPECT_TRUE(ReflectionOps::IsInitialized(message));
   EXPECT_TRUE(ReflectionOps::IsInitialized(message, true, false));
   EXPECT_TRUE(ReflectionOps::IsInitialized(message, false, true));
