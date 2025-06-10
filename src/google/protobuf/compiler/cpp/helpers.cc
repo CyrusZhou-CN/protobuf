@@ -1339,18 +1339,23 @@ bool IsV2EnabledForMessage(const Descriptor* descriptor,
 }
 
 #ifdef PROTOBUF_INTERNAL_V2_EXPERIMENT
+bool IsV2CodegenEnabled(const Options& options) {
+  return !options.opensource_runtime && !options.bootstrap;
+}
+
 bool ShouldGenerateV2Code(const Descriptor* descriptor,
                           const Options& options) {
-  return !options.opensource_runtime && !options.bootstrap &&
+  return IsV2CodegenEnabled(options) &&
          !HasSimpleBaseClass(descriptor, options);
 }
 
 bool IsEligibleForV2Batching(const FieldDescriptor* field) {
   // Non-message fields whose numbers fit into 2B should be considered for
   // batching although the actual batching depends on the current batching, the
-  // payload size, etc.
+  // payload size, etc. Oneof fields are not eligible for batching because they
+  // are handled separately.
   return field->cpp_type() != FieldDescriptor::CPPTYPE_MESSAGE &&
-         !field->is_map() &&
+         field->real_containing_oneof() == nullptr && !field->is_map() &&
          field->number() < std::numeric_limits<uint16_t>::max();
 }
 

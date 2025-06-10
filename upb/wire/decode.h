@@ -94,6 +94,11 @@ enum {
    * as non-UTF-8 proto3 string fields.
    */
   kUpb_DecodeOption_AlwaysValidateUtf8 = 8,
+
+  /* EXPERIMENTAL:
+   *
+   * If set, the fasttable decoder will not be used. */
+  kUpb_DecodeOption_DisableFastTable = 16,
 };
 // LINT.ThenChange(//depot/google3/third_party/protobuf/rust/upb.rs:decode_status)
 
@@ -142,6 +147,12 @@ UPB_API upb_DecodeStatus upb_DecodeLengthPrefixed(
     const char* buf, size_t size, upb_Message* msg, size_t* num_bytes_read,
     const upb_MiniTable* mt, const upb_ExtensionRegistry* extreg, int options,
     upb_Arena* arena);
+
+// For testing: decode with tracing.
+UPB_API upb_DecodeStatus upb_DecodeWithTrace(
+    const char* buf, size_t size, upb_Message* msg, const upb_MiniTable* mt,
+    const upb_ExtensionRegistry* extreg, int options, upb_Arena* arena,
+    char* trace_buf, size_t trace_size);
 
 // Utility function for wrapper languages to get an error string from a
 // upb_DecodeStatus.

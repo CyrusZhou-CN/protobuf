@@ -20,9 +20,11 @@
 
 struct upb_Decoder;
 struct upb_Message;
-typedef const char* _upb_FieldParser(struct upb_Decoder* d, const char* ptr,
-                                     struct upb_Message* msg, intptr_t table,
-                                     uint64_t hasbits, uint64_t data);
+
+typedef UPB_PRESERVE_NONE const char* _upb_FieldParser(
+    struct upb_Decoder* d, const char* ptr, struct upb_Message* msg,
+    intptr_t table, uint64_t hasbits, uint64_t data);
+
 typedef struct {
   uint64_t field_data;
   _upb_FieldParser* field_parser;
@@ -64,9 +66,9 @@ struct upb_MiniTable {
   const char* UPB_PRIVATE(full_name);
 #endif
 
-#ifndef __cplusplus
-  // Flexible array member is not supported in C++, but luckily C++ doesn't need
-  // to read or write the member.
+#if UPB_FASTTABLE || !defined(__cplusplus)
+  // Flexible array member is not supported in C++, but it is an extension in
+  // every compiler that supports UPB_FASTTABLE.
   _upb_FastTable_Entry UPB_PRIVATE(fasttable)[];
 #endif
 };

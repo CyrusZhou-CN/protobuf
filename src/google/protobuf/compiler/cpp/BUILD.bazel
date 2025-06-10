@@ -8,6 +8,16 @@ load("//bazel:cc_proto_library.bzl", "cc_proto_library")
 load("//bazel:proto_library.bzl", "proto_library")
 load("//build_defs:cpp_opts.bzl", "COPTS")
 
+cc_binary(
+    name = "protoc-gen-cpp",
+    srcs = ["main.cc"],
+    visibility = ["//:__pkg__"],
+    deps = [
+        ":cpp",
+        "//src/google/protobuf/compiler:plugin",
+    ],
+)
+
 cc_library(
     name = "names",
     hdrs = ["names.h"],
@@ -324,7 +334,9 @@ cc_test(
         "//src/google/protobuf/compiler:command_line_interface",
         "//src/google/protobuf/testing",
         "//src/google/protobuf/testing:file",
+        "@abseil-cpp//absl/container:flat_hash_map",
         "@abseil-cpp//absl/log:absl_check",
+        "@abseil-cpp//absl/strings",
         "@googletest//:gtest",
         "@googletest//:gtest_main",
     ],

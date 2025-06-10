@@ -5,12 +5,15 @@
 # license that can be found in the LICENSE file or at
 # https://developers.google.com/open-source/licenses/bsd
 
-load("//upb/bazel:build_defs.bzl", "UPB_DEFAULT_COPTS")
+load("//upb/bazel:build_defs.bzl", "UPB_DEFAULT_COPTS", "UPB_DEFAULT_CPPOPTS")
 
 package(default_applicable_licenses = ["//:license"])
 
 cc_library(
     name = "decoder",
+    srcs = [
+        "internal/decoder.c",
+    ],
     hdrs = [
         "decode.h",
         "internal/decoder.h",
@@ -28,6 +31,7 @@ cc_library(
         "//upb:mini_table",
         "//upb:port",
         "//upb/mem:internal",
+        "//upb/message:internal",
         "//upb/mini_table:internal",
     ],
 )
@@ -49,6 +53,7 @@ cc_library(
         ":decoder",
         ":eps_copy_input_stream",
         ":reader",
+        ":writer",
         "//third_party/utf8_range",
         "//upb:base",
         "//upb:mem",
@@ -70,21 +75,87 @@ cc_library(
     }),
 )
 
+cc_test(
+    name = "decode_test",
+    srcs = ["decode_test.cc"],
+    copts = UPB_DEFAULT_CPPOPTS,
+    deps = [
+        ":wire",
+        "//upb:mem",
+        "//upb:message",
+        "//upb:mini_table",
+        "//upb:port",
+        "//upb/message:message_cc",
+        "//upb/wire/decode_fast:combinations",
+        "//upb/wire/test_util:field_types",
+        "//upb/wire/test_util:make_mini_table",
+        "//upb/wire/test_util:wire_message",
+        "@abseil-cpp//absl/strings",
+        "@abseil-cpp//absl/strings:string_view",
+        "@googletest//:gtest",
+        "@googletest//:gtest_main",
+    ],
+)
+
+cc_binary(
+    name = "decode_benchmark",
+    testonly = True,
+    srcs = ["decode_benchmark.cc"],
+    copts = UPB_DEFAULT_CPPOPTS,
+    deps = [
+        "//upb:mem",
+        "//upb:message",
+        "//upb:mini_table",
+        "//upb:port",
+        "//upb:wire",
+        "//upb/wire/decode_fast:combinations",
+        "//upb/wire/test_util:field_types",
+        "//upb/wire/test_util:make_mini_table",
+        "//upb/wire/test_util:wire_message",
+        "@abseil-cpp//absl/container:flat_hash_set",
+        "@google_benchmark//:benchmark_main",
+        "@googletest//:gtest",
+        "@googletest//:gtest_main",
+    ],
+)
+
+cc_library(
+    name = "reader_internal",
+    hdrs = ["internal/reader.h"],
+    copts = UPB_DEFAULT_COPTS,
+    visibility = ["//upb:__pkg__"],
+    deps = ["//upb:port"],
+)
+
 cc_library(
     name = "reader",
-    srcs = [
-        "internal/reader.h",
-        "reader.c",
-    ],
+    srcs = ["reader.c"],
     hdrs = [
         "reader.h",
         "types.h",
     ],
+    copts = UPB_DEFAULT_COPTS,
     visibility = ["//visibility:public"],
     deps = [
         ":eps_copy_input_stream",
+        ":reader_internal",
         "//upb:port",
         "//upb/base:internal",
+    ],
+)
+
+cc_library(
+    name = "writer",
+    hdrs = [
+        "writer.h",
+    ],
+    copts = UPB_DEFAULT_COPTS,
+    visibility = [
+        "//upb:__pkg__",
+        "//upb/message:__pkg__",
+    ],
+    deps = [
+        "//upb:port",
     ],
 )
 
