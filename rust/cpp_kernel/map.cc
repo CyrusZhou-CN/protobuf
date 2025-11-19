@@ -2,12 +2,14 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <memory>
 #include <string>
 #include <type_traits>
 #include <utility>
 
 #include "absl/functional/overload.h"
 #include "absl/log/absl_log.h"
+#include "absl/memory/memory.h"
 #include "absl/strings/string_view.h"
 #include "google/protobuf/message.h"
 #include "google/protobuf/message_lite.h"
@@ -56,18 +58,25 @@ T AsViewType(T t) {
 
 absl::string_view AsViewType(PtrAndLen key) { return key.AsStringView(); }
 
-void InitializeMessageValue(void* raw_ptr, MessageLite* msg) {
-  MessageLite* new_msg = internal::RustMapHelper::PlacementNew(msg, raw_ptr);
-  auto* full_msg = DynamicCastMessage<Message>(new_msg);
+constexpr bool kHasFullRuntime = true;
 
+void InitializeMessageValue(void* raw_ptr,
+                            std::unique_ptr<MessageLite> prototype) {
+  MessageLite* new_msg =
+      internal::RustMapHelper::PlacementNew(prototype.get(), raw_ptr);
   // If we are working with a full (non-lite) proto, we reflectively swap the
   // value into place. Otherwise, we have to perform a copy.
-  if (full_msg != nullptr) {
-    full_msg->GetReflection()->Swap(full_msg, DynamicCastMessage<Message>(msg));
+  if constexpr (kHasFullRuntime) {
+    auto* full_msg = DynamicCastMessage<Message>(new_msg);
+    if (full_msg != nullptr) {
+      full_msg->GetReflection()->Swap(
+          full_msg, DynamicCastMessage<Message>(prototype.get()));
+    } else {
+      new_msg->CheckTypeAndMergeFrom(*prototype);
+    }
   } else {
-    new_msg->CheckTypeAndMergeFrom(*msg);
+    new_msg->CheckTypeAndMergeFrom(*prototype);
   }
-  delete msg;
 }
 
 template <typename Key>
@@ -90,7 +99,8 @@ bool Insert(internal::UntypedMapBase* m, Key key, MapValue value) {
                             delete value.s;
                           },
                           [&](MessageLite* msg) {
-                            InitializeMessageValue(msg, value.message);
+                            InitializeMessageValue(
+                                msg, absl::WrapUnique(value.message));
                           },
                       });
 
@@ -178,7 +188,6 @@ google::protobuf::internal::UntypedMapBase* proto2_rust_map_new(
     google::protobuf::rust::MapValue key_prototype,
     google::protobuf::rust::MapValue value_prototype) {
   return new google::protobuf::internal::UntypedMapBase(
-      /* arena = */ nullptr,
       google::protobuf::internal::UntypedMapBase::GetTypeInfoDynamic(
           key_prototype.tag, value_prototype.tag,
           value_prototype.tag == google::protobuf::rust::MapValueTag::kMessage
@@ -196,12 +205,12 @@ google::protobuf::internal::UntypedMapIterator proto2_rust_map_iter(
 }
 
 void proto2_rust_map_free(google::protobuf::internal::UntypedMapBase* m) {
-  m->ClearTable(false);
+  m->ClearTable(m->arena(), /*reset=*/false);
   delete m;
 }
 
 void proto2_rust_map_clear(google::protobuf::internal::UntypedMapBase* m) {
-  m->ClearTable(true);
+  m->ClearTable(m->arena(), /*reset=*/true);
 }
 
 #define DEFINE_KEY_SPECIFIC_MAP_OPERATIONS(cpp_type, suffix)                \

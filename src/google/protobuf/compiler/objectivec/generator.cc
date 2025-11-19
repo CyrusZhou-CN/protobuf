@@ -344,17 +344,6 @@ bool ObjectiveCGenerator::GenerateAll(
               << std::endl;
     std::cerr.flush();
   }
-  if (!generation_options.generate_minimal_imports &&
-      !absl::StrContains(options_warnings_suppressions,
-                         "generate_minimal_imports")) {
-    std::cerr << "WARNING: generate_minimal_imports is disabled, this is "
-                 "deprecated and will be removed in the future. If you have a "
-                 "need for disabling it please file an issue at "
-                 "https://github.com/protocolbuffers/protobuf/issues with "
-                 "your use case."
-              << std::endl;
-    std::cerr.flush();
-  }
   if (!generation_options.strip_custom_options &&
       !absl::StrContains(options_warnings_suppressions,
                          "strip_custom_options")) {
@@ -478,7 +467,7 @@ bool ObjectiveCGenerator::GenerateAll(
           }
         }
 
-        for (int i = 0; i < file_generator.NumMessages(); ++i) {
+        for (size_t i = 0; i < file_generator.NumMessages(); ++i) {
           std::unique_ptr<io::ZeroCopyOutputStream> output(
               context->Open(NumberedObjCMFileName(filepath, file_number++)));
           io::Printer printer(output.get());

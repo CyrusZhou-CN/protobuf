@@ -66,7 +66,7 @@ absl::StatusOr<Options> Options::Parse(absl::string_view param) {
   }
 
   auto mapping_arg = absl::c_find_if(
-      args, [](auto& arg) { return arg.first == "bazel_crate_mapping"; });
+      args, [](auto& arg) { return arg.first == "crate_mapping"; });
   if (mapping_arg != args.end()) {
     opts.mapping_file_path = mapping_arg->second;
   }
@@ -85,6 +85,12 @@ absl::StatusOr<Options> Options::Parse(absl::string_view param) {
   if (generated_entry_point_rs_file_name_arg != args.end()) {
     opts.generated_entry_point_rs_file_name =
         generated_entry_point_rs_file_name_arg->second;
+  }
+
+  auto lite = absl::c_find_if(
+      args, [](auto& arg) { return arg.first == "forced_lite_runtime"; });
+  if (lite != args.end()) {
+    opts.force_lite_runtime = lite->second == "true";
   }
 
   return opts;

@@ -8,14 +8,17 @@
 #include "google/protobuf/map.h"
 
 #include <algorithm>
+#include <atomic>
 #include <cstddef>
 #include <cstdint>
 #include <string>
 
+#include "absl/base/no_destructor.h"
 #include "absl/base/optimization.h"
 #include "absl/functional/overload.h"
 #include "absl/log/absl_check.h"
 #include "google/protobuf/arena.h"
+#include "google/protobuf/field_with_arena.h"
 #include "google/protobuf/message_lite.h"
 #include "google/protobuf/port.h"
 
@@ -27,9 +30,14 @@ namespace google {
 namespace protobuf {
 namespace internal {
 
+std::atomic<MapFieldBaseForParse::SyncFunc>
+    MapFieldBaseForParse::sync_map_with_repeated{};
+
 NodeBase* const kGlobalEmptyTable[kGlobalEmptyTableSize] = {};
 
-void UntypedMapBase::UntypedMergeFrom(const UntypedMapBase& other) {
+void UntypedMapBase::UntypedMergeFrom(Arena* arena,
+                                      const UntypedMapBase& other) {
+  ABSL_DCHECK_EQ(arena, this->arena());
   if (other.empty()) return;
 
   // Do the merging in steps to avoid Key*Value number of instantiations and
@@ -38,7 +46,7 @@ void UntypedMapBase::UntypedMergeFrom(const UntypedMapBase& other) {
 
   // First, allocate all the nodes without types.
   for (size_t i = 0; i < other.num_elements_; ++i) {
-    NodeBase* new_node = AllocNode();
+    NodeBase* new_node = AllocNode(arena);
     new_node->next = nodes;
     nodes = new_node;
   }
@@ -59,9 +67,9 @@ void UntypedMapBase::UntypedMergeFrom(const UntypedMapBase& other) {
       out_node = out_node->next;
       auto& in = *other.GetValue<Value>(it.node_);
       if constexpr (std::is_same_v<MessageLite, Value>) {
-        class_data->PlacementNew(out, arena())->CheckTypeAndMergeFrom(in);
+        class_data->PlacementNew(out, arena)->CheckTypeAndMergeFrom(in);
       } else {
-        Arena::CreateInArenaStorage(out, this->arena_, in);
+        Arena::CreateInArenaStorage(out, arena, in);
       }
     }
   });
@@ -74,30 +82,49 @@ void UntypedMapBase::UntypedMergeFrom(const UntypedMapBase& other) {
       nodes = nodes->next;
       const Key& in = *other.GetKey<Key>(it.node_);
       Key* out = GetKey<Key>(node);
-      if (!internal::InitializeMapKey(out, in, this->arena_)) {
-        Arena::CreateInArenaStorage(out, this->arena_, in);
+      if (!internal::InitializeMapKey(out, in, arena)) {
+        Arena::CreateInArenaStorage(out, arena, in);
       }
 
       static_cast<KeyMapBase<Key>*>(this)->InsertOrReplaceNode(
-          static_cast<typename KeyMapBase<Key>::KeyNode*>(node));
+          arena, static_cast<typename KeyMapBase<Key>::KeyNode*>(node));
     }
   });
 }
 
-void UntypedMapBase::UntypedSwap(UntypedMapBase& other) {
-  if (arena() == other.arena()) {
+void UntypedMapBase::UntypedSwap(Arena* arena, UntypedMapBase& other,
+                                 Arena* other_arena) {
+  ABSL_DCHECK_EQ(arena, this->arena());
+  ABSL_DCHECK_EQ(other_arena, other.arena());
+
+  if (arena == other_arena) {
     InternalSwap(&other);
   } else {
-    UntypedMapBase tmp(arena_, type_info_);
+#ifdef PROTOBUF_INTERNAL_REMOVE_ARENA_PTRS_MAP_FIELD
+    // `FieldWithArena` checks that the arena pointer is null when destroying a
+    // destructor-skippable type. Since `UntypedMapBase` is
+    // destructor-skippable, we need to put it in an `absl::NoDestructor` and
+    // manually destroy it if the arena pointer is null.
+    absl::NoDestructor<FieldWithArena<UntypedMapBase>> tmp_container(
+        arena, type_info_);
+    UntypedMapBase& tmp = tmp_container->field();
+#else
+    UntypedMapBase tmp(arena, type_info_);
+#endif
     InternalSwap(&tmp);
 
     ABSL_DCHECK(empty());
-    UntypedMergeFrom(other);
+    UntypedMergeFrom(arena, other);
 
-    other.ClearTable(true);
-    other.UntypedMergeFrom(tmp);
+    other.ClearTable(other_arena, /*reset=*/true);
+    other.UntypedMergeFrom(other_arena, tmp);
 
-    if (arena_ == nullptr) tmp.ClearTable(false);
+    if (arena == nullptr) {
+      tmp.ClearTable(arena, /*reset=*/false);
+#ifdef PROTOBUF_INTERNAL_REMOVE_ARENA_PTRS_MAP_FIELD
+      tmp.~UntypedMapBase();
+#endif
+    }
   }
 }
 
@@ -110,14 +137,28 @@ void UntypedMapBase::DeleteNode(NodeBase* node) {
   DeallocNode(node);
 }
 
-void UntypedMapBase::ClearTableImpl(bool reset) {
-  ABSL_DCHECK_NE(num_buckets_, kGlobalEmptyTableSize);
+void UntypedMapBase::DeleteList(NodeBase* list) {
+  while (list != nullptr) {
+    NodeBase* n = list;
+    list = list->next;
+    DeleteNode(n);
+  }
+}
 
-  if (arena_ == nullptr) {
+void UntypedMapBase::ClearTableImpl(Arena* arena, bool reset) {
+  ABSL_DCHECK_NE(num_buckets_, kGlobalEmptyTableSize);
+  ABSL_DCHECK_EQ(arena, this->arena());
+
+  if (arena == nullptr) {
     const auto loop = [this](auto destroy_node) {
       NodeBase** table = table_;
-      for (map_index_t b = index_of_first_non_null_, end = num_buckets_;
-           b < end; ++b) {
+#ifdef PROTOBUF_INTERNAL_REMOVE_ARENA_PTRS_MAP_FIELD
+      map_index_t index_of_first_non_null = 0;
+#else
+      map_index_t index_of_first_non_null = index_of_first_non_null_;
+#endif
+      for (map_index_t b = index_of_first_non_null, end = num_buckets_; b < end;
+           ++b) {
         for (NodeBase* node = table[b]; node != nullptr;) {
           NodeBase* next = node->next;
           absl::PrefetchToLocalCacheNta(next);
@@ -129,9 +170,9 @@ void UntypedMapBase::ClearTableImpl(bool reset) {
     };
 
     const auto dispatch_key = [&](auto value_handler) {
-      if (type_info_.key_type < TypeKind::kString) {
+      if (type_info_.key_type_kind() < TypeKind::kString) {
         loop(value_handler);
-      } else if (type_info_.key_type == TypeKind::kString) {
+      } else if (type_info_.key_type_kind() == TypeKind::kString) {
         loop([=](NodeBase* node) {
           static_cast<std::string*>(node->GetVoidKey())->~basic_string();
           value_handler(node);
@@ -141,13 +182,13 @@ void UntypedMapBase::ClearTableImpl(bool reset) {
       }
     };
 
-    if (type_info_.value_type < TypeKind::kString) {
+    if (type_info_.value_type_kind() < TypeKind::kString) {
       dispatch_key([](NodeBase*) {});
-    } else if (type_info_.value_type == TypeKind::kString) {
+    } else if (type_info_.value_type_kind() == TypeKind::kString) {
       dispatch_key([&](NodeBase* node) {
         GetValue<std::string>(node)->~basic_string();
       });
-    } else if (type_info_.value_type == TypeKind::kMessage) {
+    } else if (type_info_.value_type_kind() == TypeKind::kMessage) {
       dispatch_key([&](NodeBase* node) {
         GetValue<MessageLite>(node)->DestroyInstance();
       });
@@ -159,9 +200,11 @@ void UntypedMapBase::ClearTableImpl(bool reset) {
   if (reset) {
     std::fill(table_, table_ + num_buckets_, nullptr);
     num_elements_ = 0;
+#ifndef PROTOBUF_INTERNAL_REMOVE_ARENA_PTRS_MAP_FIELD
     index_of_first_non_null_ = num_buckets_;
+#endif
   } else {
-    DeleteTable(table_, num_buckets_);
+    DeleteTable(arena, table_, num_buckets_);
   }
 }
 
@@ -247,7 +290,18 @@ UntypedMapBase::TypeInfo UntypedMapBase::GetTypeInfoDynamic(
       key_offsets.end, value_type, value_prototype_if_message, max_align);
   return TypeInfo{
       Narrow<uint16_t>(AlignTo(value_offsets.end, max_align, max_align)),
-      Narrow<uint8_t>(value_offsets.start), key_type, value_type};
+      Narrow<uint8_t>(value_offsets.start), static_cast<uint8_t>(key_type),
+      static_cast<uint8_t>(value_type)};
+}
+
+void UntypedMapBase::InsertOrReplaceNodes(Arena* arena, NodeBase* list,
+                                          map_index_t count) {
+  if (ABSL_PREDICT_FALSE(count == 0)) return;
+  VisitKeyType([=](auto key_type) {
+    using Key = typename decltype(key_type)::type;
+    static_cast<KeyMapBase<Key>&>(*this).InsertOrReplaceNodes(
+        arena, static_cast<typename KeyMapBase<Key>::KeyNode*>(list), count);
+  });
 }
 
 }  // namespace internal

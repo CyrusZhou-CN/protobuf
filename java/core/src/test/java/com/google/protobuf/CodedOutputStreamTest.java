@@ -13,9 +13,9 @@ import static com.google.common.truth.TruthJUnit.assume;
 import static org.junit.Assert.assertThrows;
 
 import com.google.protobuf.CodedOutputStream.OutOfSpaceException;
-import protobuf_unittest.UnittestProto.SparseEnumMessage;
-import protobuf_unittest.UnittestProto.TestAllTypes;
-import protobuf_unittest.UnittestProto.TestSparseEnum;
+import proto2_unittest.UnittestProto.SparseEnumMessage;
+import proto2_unittest.UnittestProto.TestAllTypes;
+import proto2_unittest.UnittestProto.TestSparseEnum;
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
@@ -154,18 +154,15 @@ public class CodedOutputStreamTest {
     private final CodedOutputStream stream;
     private final ByteBuffer buffer;
 
-    NioDirectCoder(int size, boolean unsafe) {
-      this(size, 0, unsafe);
+    NioDirectCoder(int size) {
+      this(size, 0);
     }
 
-    NioDirectCoder(int size, int initialPosition, boolean unsafe) {
+    NioDirectCoder(int size, int initialPosition) {
       this.initialPosition = initialPosition;
       buffer = ByteBuffer.allocateDirect(size);
       buffer.position(initialPosition);
-      stream =
-          unsafe
-              ? CodedOutputStream.newUnsafeInstance(buffer)
-              : CodedOutputStream.newSafeInstance(buffer);
+      stream = CodedOutputStream.newInstance(buffer);
     }
 
     @Override
@@ -228,30 +225,17 @@ public class CodedOutputStreamTest {
         return new NioHeapCoder(size + offset, /* initialPosition= */ offset);
       }
     },
-    NIO_DIRECT_SAFE() {
+    NIO_DIRECT() {
       @Override
       Coder newCoder(int size) {
-        return new NioDirectCoder(size, /* unsafe= */ false);
+        return new NioDirectCoder(size);
       }
     },
-    NIO_DIRECT_SAFE_WITH_INITIAL_OFFSET() {
+    NIO_DIRECT_WITH_INITIAL_OFFSET() {
       @Override
       Coder newCoder(int size) {
         int offset = 2;
-        return new NioDirectCoder(size + offset, offset, /* unsafe= */ false);
-      }
-    },
-    NIO_DIRECT_UNSAFE() {
-      @Override
-      Coder newCoder(int size) {
-        return new NioDirectCoder(size, /* unsafe= */ true);
-      }
-    },
-    NIO_DIRECT_UNSAFE_WITH_INITIAL_OFFSET() {
-      @Override
-      Coder newCoder(int size) {
-        int offset = 2;
-        return new NioDirectCoder(size + offset, offset, /* unsafe= */ true);
+        return new NioDirectCoder(size + offset, offset);
       }
     },
     STREAM() {

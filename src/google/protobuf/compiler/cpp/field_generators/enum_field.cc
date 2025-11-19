@@ -25,6 +25,9 @@
 #include "google/protobuf/descriptor.pb.h"
 #include "google/protobuf/io/printer.h"
 
+// Must be included last.
+#include "google/protobuf/port_def.inc"
+
 namespace google {
 namespace protobuf {
 namespace compiler {
@@ -90,13 +93,6 @@ class SingularEnum : public FieldGeneratorBase {
     )cc");
   }
 
-  void GenerateConstructorCode(io::Printer* p) const override {
-    if (!is_oneof()) return;
-    p->Emit(R"cc(
-      $ns$::_$Msg$_default_instance_.$field_$ = $kDefault$;
-    )cc");
-  }
-
   void GenerateCopyConstructorCode(io::Printer* p) const override {
     p->Emit(R"cc(
       _this->$field_$ = from.$field_$;
@@ -117,6 +113,7 @@ class SingularEnum : public FieldGeneratorBase {
                     ::_pbi::WireFormatLite::EnumSize(this_._internal_$name$());
     )cc");
   }
+
 
   void GenerateConstexprAggregateInitializer(io::Printer* p) const override {
     p->Emit(R"cc(
@@ -304,9 +301,14 @@ class RepeatedEnum : public FieldGeneratorBase {
   }
 
   void GenerateAggregateInitializer(io::Printer* p) const override {
-    p->Emit(R"cc(
-      decltype($field_$){arena},
-    )cc");
+    p->Emit({InternalMetadataOffsetSub(p)},
+            R"cc(
+#ifdef PROTOBUF_INTERNAL_REMOVE_ARENA_PTRS_REPEATED_FIELD
+              decltype($field_$){$internal_metadata_offset$},
+#else
+              decltype($field_$){arena},
+#endif
+            )cc");
     if (has_cached_size_) {
       // std::atomic has no copy constructor, which prevents explicit aggregate
       // initialization pre-C++17.
@@ -329,21 +331,41 @@ class RepeatedEnum : public FieldGeneratorBase {
   }
 
   void GenerateMemberConstexprConstructor(io::Printer* p) const override {
-    p->Emit("$name$_{}");
+    p->Emit({InternalMetadataOffsetSub(p)},
+            R"cc(
+#ifdef PROTOBUF_INTERNAL_REMOVE_ARENA_PTRS_REPEATED_FIELD
+              $name$_{visibility, $internal_metadata_offset$}
+#else
+              $name$_ {}
+#endif
+            )cc");
     if (has_cached_size_) {
       p->Emit(",\n_$name$_cached_byte_size_{0}");
     }
   }
 
   void GenerateMemberConstructor(io::Printer* p) const override {
-    p->Emit("$name$_{visibility, arena}");
+    p->Emit({InternalMetadataOffsetSub(p)},
+            R"cc(
+#ifdef PROTOBUF_INTERNAL_REMOVE_ARENA_PTRS_REPEATED_FIELD
+              $name$_{visibility, $internal_metadata_offset$}
+#else
+              $name$_ { visibility, arena }
+#endif
+            )cc");
     if (has_cached_size_) {
       p->Emit(",\n_$name$_cached_byte_size_{0}");
     }
   }
 
   void GenerateMemberCopyConstructor(io::Printer* p) const override {
-    p->Emit("$name$_{visibility, arena, from.$name$_}");
+    p->Emit({InternalMetadataOffsetSub(p)},
+            R"cc(
+#ifdef PROTOBUF_INTERNAL_REMOVE_ARENA_PTRS_REPEATED_FIELD
+              $name$_{visibility, $internal_metadata_offset$, from.$name$_}
+#else
+              $name$_ { visibility, arena, from.$name$_ }
+#endif)cc");
     if (has_cached_size_) {
       p->Emit(",\n_$name$_cached_byte_size_{0}");
     }
@@ -362,8 +384,6 @@ class RepeatedEnum : public FieldGeneratorBase {
       )cc");
     }
   }
-
-  void GenerateConstructorCode(io::Printer* p) const override {}
 
   void GenerateAccessorDeclarations(io::Printer* p) const override;
   void GenerateInlineAccessorDefinitions(io::Printer* p) const override;
@@ -409,6 +429,9 @@ void RepeatedEnum::GenerateInlineAccessorDefinitions(io::Printer* p) const {
     }
   )cc");
   p->Emit(R"cc(
+    //~ Note: no need to set hasbit in set_$name$(int index). Hasbits only
+    //~ need to be updated if a new element is (potentially) added, not if an
+    //~ existing element is mutated.
     inline void $Msg$::set_$name$(int index, $Enum$ value) {
       $WeakDescriptorSelfPin$;
       $assert_valid$;
@@ -422,7 +445,9 @@ void RepeatedEnum::GenerateInlineAccessorDefinitions(io::Printer* p) const {
       $WeakDescriptorSelfPin$;
       $assert_valid$;
       $TsanDetectConcurrentMutation$;
-      _internal_mutable_$name_internal$()->Add(value);
+      _internal_mutable_$name_internal$()->InternalAddWithArena(
+          internal_visibility(), GetArena(), value);
+      $set_hasbit$;
       $annotate_add$
       // @@protoc_insertion_point(field_add:$pkg.Msg.field$)
     }
@@ -440,6 +465,7 @@ void RepeatedEnum::GenerateInlineAccessorDefinitions(io::Printer* p) const {
     inline $pb$::RepeatedField<int>* $nonnull$ $Msg$::mutable_$name$()
         ABSL_ATTRIBUTE_LIFETIME_BOUND {
       $WeakDescriptorSelfPin$;
+      $set_hasbit$;
       $annotate_mutable_list$;
       // @@protoc_insertion_point(field_mutable_list:$pkg.Msg.field$)
       $TsanDetectConcurrentMutation$;
@@ -487,14 +513,14 @@ void RepeatedEnum::GenerateSerializeWithCachedSizesToArray(
             {"byte_size",
              [&] {
                if (has_cached_size_) {
-                 p->Emit(R"cc(std::size_t byte_size =
-                                  this_.$cached_size_$.Get();)cc");
+                 p->Emit(
+                     R"cc(::size_t byte_size = this_.$cached_size_$.Get();)cc");
                } else {
                  p->Emit(R"cc(
-                   std::size_t byte_size = 0;
-                   auto count = static_cast<std::size_t>(this_._internal_$name$_size());
+                   ::size_t byte_size = 0;
+                   auto count = static_cast<::size_t>(this_._internal_$name$_size());
 
-                   for (std::size_t i = 0; i < count; ++i) {
+                   for (::size_t i = 0; i < count; ++i) {
                      byte_size += ::_pbi::WireFormatLite::EnumSize(
                          this_._internal_$name$().Get(static_cast<int>(i)));
                    }
@@ -545,16 +571,16 @@ void RepeatedEnum::GenerateByteSize(io::Printer* p) const {
                )cc");
              } else {
                p->Emit(R"cc(
-                 std::size_t{$kTagBytes$} *
+                 ::size_t{$kTagBytes$} *
                      ::_pbi::FromIntSize(this_._internal_$name$_size());
                )cc");
              }
            }},
       },
       R"cc(
-        std::size_t data_size =
+        ::size_t data_size =
             ::_pbi::WireFormatLite::EnumSize(this_._internal_$name$());
-        std::size_t tag_size = $tag_size$;
+        ::size_t tag_size = $tag_size$;
         total_size += data_size + tag_size;
       )cc");
 }
@@ -576,3 +602,5 @@ std::unique_ptr<FieldGeneratorBase> MakeRepeatedEnumGenerator(
 }  // namespace compiler
 }  // namespace protobuf
 }  // namespace google
+
+#include "google/protobuf/port_undef.inc"

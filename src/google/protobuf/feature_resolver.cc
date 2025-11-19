@@ -26,6 +26,7 @@
 #include "absl/strings/str_join.h"
 #include "absl/strings/str_split.h"
 #include "absl/strings/string_view.h"
+#include "absl/strings/substitute.h"
 #include "absl/types/span.h"
 #include "google/protobuf/cpp_features.pb.h"
 #include "google/protobuf/descriptor.h"
@@ -253,7 +254,7 @@ absl::Status ValidateExtension(const Descriptor& feature_set,
 
 void MaybeInsertEdition(Edition edition, Edition maximum_edition,
                         absl::btree_set<Edition>& editions) {
-  if (edition <= maximum_edition) {
+  if (edition <= maximum_edition || edition == EDITION_UNSTABLE) {
     editions.insert(edition);
   }
 }
@@ -353,6 +354,9 @@ absl::Status ValidateMergedFeatures(const FeatureSet& features) {
   CHECK_ENUM_FEATURE(json_format, JsonFormat, JSON_FORMAT)
   CHECK_ENUM_FEATURE(enforce_naming_style, EnforceNamingStyle,
                      ENFORCE_NAMING_STYLE)
+  CHECK_ENUM_FEATURE(default_symbol_visibility,
+                     VisibilityFeature::DefaultSymbolVisibility,
+                     VisibilityFeature::DEFAULT_SYMBOL_VISIBILITY)
 
 #undef CHECK_ENUM_FEATURE
 
@@ -361,26 +365,36 @@ absl::Status ValidateMergedFeatures(const FeatureSet& features) {
 
 void ValidateSingleFeatureLifetimes(
     Edition edition, absl::string_view full_name,
-    const FieldOptions::FeatureSupport& support,
+    const FieldOptions::FeatureSupport& feature_support,
     FeatureResolver::ValidationResults& results) {
   // Skip fields that don't have feature support specified.
-  if (&support == &FieldOptions::FeatureSupport::default_instance()) return;
-
-  if (edition < support.edition_introduced()) {
-    results.errors.emplace_back(
-        absl::StrCat("Feature ", full_name, " wasn't introduced until edition ",
-                     support.edition_introduced(),
-                     " and can't be used in edition ", edition));
+  if (&feature_support == &FieldOptions::FeatureSupport::default_instance())
+    return;
+  // safe guarding new features that aren't available yet
+  if (edition < feature_support.edition_introduced()) {
+    std::string error_message = absl::Substitute(
+        "$0 wasn't introduced until edition $1 and can't be used in "
+        "edition $2",
+        full_name, feature_support.edition_introduced(), edition);
+    results.errors.emplace_back(std::move(error_message));
   }
-  if (support.has_edition_removed() && edition >= support.edition_removed()) {
-    results.errors.emplace_back(absl::StrCat(
-        "Feature ", full_name, " has been removed in edition ",
-        support.edition_removed(), " and can't be used in edition ", edition));
-  } else if (support.has_edition_deprecated() &&
-             edition >= support.edition_deprecated()) {
-    results.warnings.emplace_back(absl::StrCat(
-        "Feature ", full_name, " has been deprecated in edition ",
-        support.edition_deprecated(), ": ", support.deprecation_warning()));
+  if (feature_support.has_edition_removed() &&
+      edition >= feature_support.edition_removed()) {
+    std::string error_message = absl::Substitute(
+        "$0 has been removed in edition $1$2", full_name,
+        feature_support.edition_removed(),
+        (feature_support.has_removal_error())
+            ? absl::StrCat(": ", feature_support.removal_error())
+            : "");
+    results.errors.emplace_back(std::move(error_message));
+  } else if (feature_support.has_edition_deprecated() &&
+             edition >= feature_support.edition_deprecated()) {
+    std::string error_message = absl::Substitute(
+        "$0 has been deprecated in edition "
+        "$1: $2",
+        full_name, feature_support.edition_deprecated(),
+        feature_support.deprecation_warning());
+    results.warnings.emplace_back(std::move(error_message));
   }
 }
 
@@ -495,7 +509,8 @@ absl::StatusOr<FeatureResolver> FeatureResolver::Create(
                  " is earlier than the minimum supported edition ",
                  compiled_defaults.minimum_edition());
   }
-  if (compiled_defaults.maximum_edition() < edition) {
+  if (compiled_defaults.maximum_edition() < edition &&
+      edition != EDITION_UNSTABLE) {
     return Error("Edition ", edition,
                  " is later than the maximum supported edition ",
                  compiled_defaults.maximum_edition());
@@ -523,21 +538,10 @@ absl::StatusOr<FeatureResolver> FeatureResolver::Create(
     prev_edition = edition_default.edition();
   }
 
-  // Select the matching edition defaults.
-  auto comparator = [](const auto& a, const auto& b) {
-    return a.edition() < b.edition();
-  };
-  FeatureSetDefaults::FeatureSetEditionDefault search;
-  search.set_edition(edition);
-  auto first_nonmatch =
-      absl::c_upper_bound(compiled_defaults.defaults(), search, comparator);
-  if (first_nonmatch == compiled_defaults.defaults().begin()) {
-    return Error("No valid default found for edition ", edition);
-  }
-
-  FeatureSet features = std::prev(first_nonmatch)->fixed_features();
-  features.MergeFrom(std::prev(first_nonmatch)->overridable_features());
-  return FeatureResolver(std::move(features));
+  auto features =
+      internal::GetEditionFeatureSetDefaults(edition, compiled_defaults);
+  RETURN_IF_ERROR(features.status());
+  return FeatureResolver(std::move(features.value()));
 }
 
 absl::StatusOr<FeatureSet> FeatureResolver::MergeFeatures(
@@ -578,6 +582,25 @@ FeatureResolver::ValidationResults FeatureResolver::ValidateFeatureLifetimes(
   return results;
 }
 
+namespace internal {
+absl::StatusOr<FeatureSet> GetEditionFeatureSetDefaults(
+    Edition edition, const FeatureSetDefaults& defaults) {
+  // Select the matching edition defaults.
+  auto comparator = [](const auto& a, const auto& b) {
+    return a.edition() < b.edition();
+  };
+  FeatureSetDefaults::FeatureSetEditionDefault search;
+  search.set_edition(edition);
+  auto first_nonmatch =
+      absl::c_upper_bound(defaults.defaults(), search, comparator);
+  if (first_nonmatch == defaults.defaults().begin()) {
+    return Error("No valid default found for edition ", edition);
+  }
+  FeatureSet features = std::prev(first_nonmatch)->fixed_features();
+  features.MergeFrom(std::prev(first_nonmatch)->overridable_features());
+  return features;
+}
+}  // namespace internal
 }  // namespace protobuf
 }  // namespace google
 

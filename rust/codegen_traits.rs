@@ -7,13 +7,13 @@
 
 //! Traits that are implemented by codegen types.
 
+use crate::MutProxied;
 use crate::__internal::SealedInternal;
-use crate::{MutProxied, MutProxy, ViewProxy};
 use create::Parse;
 use interop::{MessageMutInterop, MessageViewInterop, OwnedMessageInterop};
 use read::Serialize;
 use std::fmt::Debug;
-use write::{Clear, ClearAndParse, MergeFrom};
+use write::{Clear, ClearAndParse, CopyFrom, MergeFrom, TakeFrom};
 
 /// A trait that all generated owned message types implement.
 pub trait Message: SealedInternal
@@ -23,7 +23,7 @@ pub trait Message: SealedInternal
   // Read traits:
   + Debug + Serialize
   // Write traits:
-  + Clear + ClearAndParse + MergeFrom
+  + Clear + ClearAndParse + TakeFrom + CopyFrom + MergeFrom
   // Thread safety:
   + Send + Sync
   // Copy/Clone:
@@ -35,7 +35,6 @@ pub trait Message: SealedInternal
 
 /// A trait that all generated message views implement.
 pub trait MessageView<'msg>: SealedInternal
-    + ViewProxy<'msg, Proxied = Self::Message>
     // Read traits:
     + Debug + Serialize + Default
     // Thread safety:
@@ -51,12 +50,10 @@ pub trait MessageView<'msg>: SealedInternal
 
 /// A trait that all generated message muts implement.
 pub trait MessageMut<'msg>: SealedInternal
-    + MutProxy<'msg, MutProxied = Self::Message>
     // Read traits:
     + Debug + Serialize
     // Write traits:
-    // TODO: MsgMut should impl ClearAndParse.
-    + Clear + MergeFrom
+    + Clear + ClearAndParse + TakeFrom + CopyFrom + MergeFrom
     // Thread safety:
     + Sync
     // Copy/Clone:
@@ -74,6 +71,23 @@ pub(crate) mod create {
     use super::SealedInternal;
     pub trait Parse: SealedInternal + Sized {
         fn parse(serialized: &[u8]) -> Result<Self, crate::ParseError>;
+        fn parse_dont_enforce_required(serialized: &[u8]) -> Result<Self, crate::ParseError>;
+    }
+
+    impl<T> Parse for T
+    where
+        Self: Default + crate::ClearAndParse,
+    {
+        fn parse(serialized: &[u8]) -> Result<Self, crate::ParseError> {
+            let mut msg = Self::default();
+            crate::ClearAndParse::clear_and_parse(&mut msg, serialized).map(|_| msg)
+        }
+
+        fn parse_dont_enforce_required(serialized: &[u8]) -> Result<Self, crate::ParseError> {
+            let mut msg = Self::default();
+            crate::ClearAndParse::clear_and_parse_dont_enforce_required(&mut msg, serialized)
+                .map(|_| msg)
+        }
     }
 }
 
@@ -93,7 +107,7 @@ pub(crate) mod read {
 /// traits.
 pub(crate) mod write {
     use super::SealedInternal;
-    use crate::AsView;
+    use crate::{AsMut, AsView};
 
     pub trait Clear: SealedInternal {
         fn clear(&mut self);
@@ -101,6 +115,27 @@ pub(crate) mod write {
 
     pub trait ClearAndParse: SealedInternal {
         fn clear_and_parse(&mut self, data: &[u8]) -> Result<(), crate::ParseError>;
+        fn clear_and_parse_dont_enforce_required(
+            &mut self,
+            data: &[u8],
+        ) -> Result<(), crate::ParseError>;
+    }
+
+    /// Copies the contents from `src` into `self`.
+    ///
+    /// This is a copy in the sense that `src` message is not mutated and `self` will have
+    /// the same state as `src` after this call; it may not be a bitwise copy.
+    pub trait CopyFrom: AsView + SealedInternal {
+        fn copy_from(&mut self, src: impl AsView<Proxied = Self::Proxied>);
+    }
+
+    /// Moves the contents from `src` into `self`.
+    ///
+    /// Any previous state of `self` is discarded, and if `src` is still observable then it is
+    /// guaranteed to be in its default state after this call. If `src` is a field on a parent
+    /// message, the presence of that field will be unaffected.
+    pub trait TakeFrom: AsView + SealedInternal {
+        fn take_from(&mut self, src: impl AsMut<MutProxied = Self::Proxied>);
     }
 
     pub trait MergeFrom: AsView + SealedInternal {
@@ -212,6 +247,7 @@ pub(crate) mod interop {
         ///   let m = unsafe { __unstable_wrap_raw_message_mut(&mut msg) };
         ///   do_something_with_mut(m);
         /// }
+        /// ```
         ///
         /// # Safety
         ///   - The underlying message must be for the same type as `Self`
@@ -236,5 +272,15 @@ pub(crate) mod interop {
         ///     and not mutated while the wrapper is live.
         #[cfg(cpp_kernel)]
         unsafe fn __unstable_wrap_raw_message_mut_unchecked_lifetime(raw: *mut c_void) -> Self;
+    }
+
+    /// Trait related to message descriptors.
+    /// Note that this is only implemented for the types implementing
+    /// `proto2::Message`.
+    #[cfg(all(cpp_kernel, not(lite_runtime)))]
+    pub trait MessageDescriptorInterop {
+        /// Returns a pointer to a `proto2::Descriptor` or `nullptr` if the
+        /// descriptor is not available.
+        fn __unstable_get_descriptor() -> *const std::ffi::c_void;
     }
 }

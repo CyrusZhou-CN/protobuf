@@ -560,7 +560,7 @@ std::string IoTest::Uncompress(const std::string& data) {
 TEST_F(IoTest, CompressionOptions) {
   // Some ad-hoc testing of compression options.
 
-  protobuf_unittest::TestAllTypes message;
+  proto2_unittest::TestAllTypes message;
   TestUtil::SetAllFields(&message);
   std::string golden = message.SerializeAsString();
 
@@ -1561,7 +1561,7 @@ class MsvcDebugDisabler {
 #else
   // Dummy constructor and destructor to ensure that GCC doesn't complain
   // that debug_disabler is an unused variable.
-  MsvcDebugDisabler() {}
+  MsvcDebugDisabler() = default;
   ~MsvcDebugDisabler() {}
 #endif
 };

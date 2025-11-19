@@ -8,6 +8,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
+#include <optional>
 
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
@@ -15,8 +16,8 @@
 #include "absl/log/absl_check.h"
 #include "absl/log/absl_log.h"
 #include "absl/strings/str_cat.h"
+#include "absl/strings/str_replace.h"
 #include "absl/strings/string_view.h"
-#include "absl/types/optional.h"
 #include "google/protobuf/descriptor.h"
 #include "google/protobuf/descriptor_database.h"
 #include "google/protobuf/descriptor_visitor.h"
@@ -54,9 +55,9 @@ TcFieldData Xor2SerializedBytes(TcFieldData tfd, const char* ptr) {
   return tfd;
 }
 
-absl::optional<const char*> fallback_ptr_received;
-absl::optional<uint64_t> fallback_hasbits_received;
-absl::optional<uint64_t> fallback_tag_received;
+std::optional<const char*> fallback_ptr_received;
+std::optional<uint64_t> fallback_hasbits_received;
+std::optional<uint64_t> fallback_tag_received;
 PROTOBUF_CC const char* FastParserGaveUp(
     ::google::protobuf::MessageLite*, const char* ptr, ::google::protobuf::internal::ParseContext*,
     ::google::protobuf::internal::TcFieldData data,
@@ -88,21 +89,25 @@ TEST(FastVarints, NameHere) {
   constexpr uint8_t kHasBitIndex = 0;
   constexpr uint8_t kFieldOffset = 24;
 
-  // clang-format on
+  const ClassData class_data(
+      nullptr, nullptr, nullptr, nullptr, nullptr, MessageCreator(), nullptr,
+      nullptr, nullptr, nullptr, /*cached_size_offset=*/16, /*is_lite*/ true);
+
   const TcParseTable<0, 1, 0, 0, 2> parse_table = {
       {
           kHasBitsOffset,  //
           0,               // no _extensions_
-          1, 0,            // max_field_number, fast_idx_mask
+          1,
+          0,  // max_field_number, fast_idx_mask
           offsetof(decltype(parse_table), field_lookup_table),
           0xFFFFFFFF - 1,  // skipmap
           offsetof(decltype(parse_table), field_entries),
           1,                                             // num_field_entries
           0,                                             // num_aux_entries
           offsetof(decltype(parse_table), field_names),  // no aux_entries
-          nullptr,                                       // default instance
-          nullptr,                                       // post_loop_handler
-          FastParserGaveUp,                              // fallback
+          &class_data,
+          nullptr,           // post_loop_handler
+          FastParserGaveUp,  // fallback
 #ifdef PROTOBUF_PREFETCH_PARSE_TABLE
           nullptr,  // to_prefetch
 #endif              // PROTOBUF_PREFETCH_PARSE_TABLE
@@ -124,7 +129,6 @@ TEST(FastVarints, NameHere) {
       // no aux_entries
       {{}},
   };
-  // clang-format on
   uint8_t serialize_buffer[64];
 
   for (int size : {8, 32, 64}) {
@@ -201,9 +205,9 @@ TEST(FastVarints, NameHere) {
             fn = &TcParser::FastV64S1;
             break;
         }
-        fallback_ptr_received = absl::nullopt;
-        fallback_hasbits_received = absl::nullopt;
-        fallback_tag_received = absl::nullopt;
+        fallback_ptr_received = std::nullopt;
+        fallback_hasbits_received = std::nullopt;
+        fallback_tag_received = std::nullopt;
         end_ptr = fn(reinterpret_cast<MessageLite*>(fake_msg), ptr, &ctx,
                      Xor2SerializedBytes(parse_table.fast_entries[0].bits, ptr),
                      &parse_table.header, /*hasbits=*/0);
@@ -891,12 +895,12 @@ TEST(GeneratedMessageTctableLiteTest, PackedEnumSmallRange) {
   // implementation of Reserve() -- Reserve(kNumVals) always results in a
   // different final capacity than you'd get by adding elements one at a time.
   constexpr int kNumVals = 1023;
-  protobuf_unittest::TestPackedEnumSmallRange proto;
+  proto2_unittest::TestPackedEnumSmallRange proto;
   for (int i = 0; i < kNumVals; i++) {
-    proto.add_vals(protobuf_unittest::TestPackedEnumSmallRange::FOO);
+    proto.add_vals(proto2_unittest::TestPackedEnumSmallRange::FOO);
   }
 
-  protobuf_unittest::TestPackedEnumSmallRange new_proto;
+  proto2_unittest::TestPackedEnumSmallRange new_proto;
   new_proto.ParseFromString(proto.SerializeAsString());
 
   // We should have reserved exactly the right size for new_proto's `vals`,
@@ -905,7 +909,7 @@ TEST(GeneratedMessageTctableLiteTest, PackedEnumSmallRange) {
 
   // Check that new_proto's capacity is equal to exactly what we'd get from
   // calling Reserve(n).
-  protobuf_unittest::TestPackedEnumSmallRange empty_proto;
+  proto2_unittest::TestPackedEnumSmallRange empty_proto;
   empty_proto.mutable_vals()->Reserve(kNumVals);
   EXPECT_EQ(new_proto.vals().Capacity(), empty_proto.vals().Capacity());
 }
@@ -953,11 +957,11 @@ TEST(GeneratedMessageTctableLiteTest, PackedEnumSmallRangeLargeSize) {
   // This isn't a legal proto because the given array length (a little less than
   // 2^31) doesn't match the actual array length (0).  But all we're checking
   // for here is that we don't have UB when deserializing.
-  protobuf_unittest::TestPackedEnumSmallRange proto;
+  proto2_unittest::TestPackedEnumSmallRange proto;
   // Add a few elements to the proto so that when we MergeFromString, the final
   // array length is greater than INT32_MAX.
   for (int i = 0; i < 128; i++) {
-    proto.add_vals(protobuf_unittest::TestPackedEnumSmallRange::FOO);
+    proto.add_vals(proto2_unittest::TestPackedEnumSmallRange::FOO);
   }
   EXPECT_FALSE(proto.MergeFromString(serialized));
 }
@@ -980,10 +984,11 @@ TEST(GeneratedMessageTctableLiteTest,
   // The deserialized proto should reserve much less than 2^20 elements for
   // field 1, because it notices that the input serialized proto is much smaller
   // than 2^20 bytes.
-  protobuf_unittest::TestPackedEnumSmallRange proto;
+  proto2_unittest::TestPackedEnumSmallRange proto;
   proto.MergeFromString(serialized);
   EXPECT_LE(proto.vals().Capacity(), 2048);
 }
+
 
 
 }  // namespace internal

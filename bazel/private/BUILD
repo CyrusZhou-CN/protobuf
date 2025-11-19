@@ -55,13 +55,16 @@ bzl_library(
 bzl_library(
     name = "proto_info_bzl",
     srcs = ["proto_info.bzl"],
-    visibility = ["//bazel:__subpackages__"],
+    visibility = [
+        "//bazel:__subpackages__",
+        "//rust:__subpackages__",
+    ],
 )
 
 bzl_library(
-    name = "bazel_proto_library_rule_bzl",
+    name = "proto_library_rule_bzl",
     srcs = [
-        "bazel_proto_library_rule.bzl",
+        "proto_library_rule.bzl",
     ],
     visibility = ["//bazel:__subpackages__"],
     deps = [
@@ -80,7 +83,9 @@ bzl_library(
         "bazel_java_proto_library_rule.bzl",
         "java_proto_support.bzl",
     ],
-    visibility = ["//bazel:__subpackages__"],
+    visibility = [
+        "//bazel:__subpackages__",
+    ],
     deps = [
         ":toolchain_helpers_bzl",
         "//bazel/common:proto_common_bzl",

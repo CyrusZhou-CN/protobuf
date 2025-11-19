@@ -18,7 +18,10 @@
 #include "absl/memory/memory.h"
 #include "absl/status/status.h"
 #include "absl/status/statusor.h"
+#include "absl/strings/escaping.h"
+#include "absl/strings/match.h"
 #include "absl/strings/str_cat.h"
+#include "absl/strings/str_replace.h"
 #include "absl/strings/string_view.h"
 #include "absl/strings/strip.h"
 #include "absl/types/span.h"
@@ -34,6 +37,9 @@
 #include "google/protobuf/descriptor.h"
 #include "google/protobuf/descriptor.pb.h"
 #include "google/protobuf/io/printer.h"
+#include "upb/mem/arena.hpp"
+#include "upb/reflection/def.hpp"
+#include "upb_generator/plugin.h"
 
 namespace google {
 namespace protobuf {
@@ -51,8 +57,11 @@ void EmitPublicImportsForDepFile(Context& ctx, const FileDescriptor* dep) {
     auto path = RsTypePath(ctx, *msg);
     ctx.Emit({{"pkg::Msg", path}},
              R"rs(
+                #[allow(unused_imports)]
                 pub use $pkg::Msg$;
+                #[allow(unused_imports)]
                 pub use $pkg::Msg$View;
+                #[allow(unused_imports)]
                 pub use $pkg::Msg$Mut;
               )rs");
   }
@@ -61,6 +70,7 @@ void EmitPublicImportsForDepFile(Context& ctx, const FileDescriptor* dep) {
     auto path = RsTypePath(ctx, *enum_);
     ctx.Emit({{"pkg::Enum", path}},
              R"rs(
+                #[allow(unused_imports)]
                 pub use $pkg::Enum$;
               )rs");
   }
@@ -127,6 +137,43 @@ void EmitEntryPointRsFile(GeneratorContext* generator_context,
               pub use internal_do_not_use_$mod_name$::*;
             )rs");
   }
+
+  auto v = ctx.printer().WithVars({
+      {"pbu", "::protobuf::__internal::runtime::__unstable"},
+  });
+  if (ctx.is_upb() && !ctx.opts().strip_nonfunctional_codegen) {
+    ctx.Emit(R"rs(
+      pub mod __unstable {
+    )rs");
+    for (const FileDescriptor* file : files) {
+      FileDescriptorProto descriptor_proto;
+      file->CopyTo(&descriptor_proto);
+      ctx.Emit({{"name", DescriptorInfoName(*file)},
+                {"serialized_descriptor",
+                 absl::CHexEscape(descriptor_proto.SerializeAsString())},
+                {"deps",
+                 [&] {
+                   for (int i = 0; i < file->dependency_count(); ++i) {
+                     const FileDescriptor& dep = *file->dependency(i);
+                     std::string mod = IsInCurrentlyGeneratingCrate(ctx, dep)
+                                           ? "super"
+                                           : GetCrateName(ctx, dep);
+                     ctx.Emit(
+                         {{"mod", mod}, {"dep_name", DescriptorInfoName(dep)}},
+                         "&$mod$::__unstable::$dep_name$,\n");
+                   }
+                 }}},
+               R"rs(
+          pub static $name$: $pbu$::DescriptorInfo = $pbu$::DescriptorInfo {
+            descriptor: b"$serialized_descriptor$",
+            deps: &[
+              $deps$
+            ],
+          };
+      )rs");
+    }
+    ctx.Emit("}\n");
+  }
 }
 
 }  // namespace
@@ -176,8 +223,11 @@ bool RustGenerator::Generate(const FileDescriptor* file,
       {"Option", "::std::option::Option"},
   });
 
-  std::string expected_runtime_version = absl::StrCat(
-      absl::StripSuffix(PROTOBUF_RUST_VERSION_STRING, "-dev"), "-beta2");
+  std::string expected_runtime_version = absl::StrReplaceAll(
+      PROTOBUF_RUST_VERSION_STRING, {{"-dev", ""}, {"-rc", "-rc."}});
+  if (!absl::StrContains(expected_runtime_version, "-rc")) {
+    expected_runtime_version.append("-release");
+  }
 
   ctx.Emit({{"expected_runtime_version", expected_runtime_version}},
            R"rs(
@@ -230,10 +280,15 @@ bool RustGenerator::Generate(const FileDescriptor* file,
 
   EmitPublicImports(rust_generator_context, ctx, *file);
 
+  upb::Arena arena;
+  upb::DefPool pool;
+  absl::flat_hash_set<std::string> files_seen;
+  upb::generator::PopulateDefPool(file, &arena, &pool, &files_seen);
+
   for (int i = 0; i < file->message_type_count(); ++i) {
     auto& msg = *file->message_type(i);
 
-    GenerateRs(ctx, msg);
+    GenerateRs(ctx, msg, pool);
     ctx.printer().PrintRaw("\n");
 
     if (ctx.is_cpp()) {
@@ -249,7 +304,8 @@ bool RustGenerator::Generate(const FileDescriptor* file,
 
   for (int i = 0; i < file->enum_type_count(); ++i) {
     auto& enum_ = *file->enum_type(i);
-    GenerateEnumDefinition(ctx, enum_);
+    GenerateEnumDefinition(ctx, enum_,
+                           pool.FindEnumByName(enum_.full_name().data()));
     ctx.printer().PrintRaw("\n");
 
     if (ctx.is_cpp()) {

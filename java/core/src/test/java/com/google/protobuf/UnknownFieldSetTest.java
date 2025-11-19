@@ -11,14 +11,14 @@ import static com.google.common.truth.Truth.assertThat;
 import static com.google.common.truth.Truth.assertWithMessage;
 import static org.junit.Assert.assertThrows;
 
-import protobuf_unittest.UnittestProto;
-import protobuf_unittest.UnittestProto.ForeignEnum;
-import protobuf_unittest.UnittestProto.TestAllExtensions;
-import protobuf_unittest.UnittestProto.TestAllTypes;
-import protobuf_unittest.UnittestProto.TestEmptyMessage;
-import protobuf_unittest.UnittestProto.TestEmptyMessageWithExtensions;
-import protobuf_unittest.UnittestProto.TestPackedExtensions;
-import protobuf_unittest.UnittestProto.TestPackedTypes;
+import proto2_unittest.UnittestProto;
+import proto2_unittest.UnittestProto.ForeignEnum;
+import proto2_unittest.UnittestProto.TestAllExtensions;
+import proto2_unittest.UnittestProto.TestAllTypes;
+import proto2_unittest.UnittestProto.TestEmptyMessage;
+import proto2_unittest.UnittestProto.TestEmptyMessageWithExtensions;
+import proto2_unittest.UnittestProto.TestPackedExtensions;
+import proto2_unittest.UnittestProto.TestPackedTypes;
 import proto3_unittest.UnittestProto3;
 import java.util.List;
 import java.util.Map;
@@ -399,7 +399,8 @@ public class UnknownFieldSetTest {
             .mergeFrom(source)
             .build();
 
-    assertThat(destination.toString()).isEqualTo("1: 1\n2: 2\n3: 3\n3: 4\n");
+    assertThat(TextFormat.printer().printToString(destination))
+        .isEqualTo("1: 1\n2: 2\n3: 3\n3: 4\n");
   }
 
   @Test

@@ -49,12 +49,6 @@ GPB_INLINE void GPB_DEBUG_CHECK_RUNTIME_VERSIONS(void) {
 #endif
 }
 
-// Helper called within the library when the runtime detects something that
-// indicates a older runtime is being used with newer generated code. Normally
-// GPB_DEBUG_CHECK_RUNTIME_VERSIONS() gates this with a better message; this
-// is just a final safety net to prevent otherwise hard to diagnose errors.
-void GPBRuntimeMatchFailure(void);
-
 // Conversion functions for de/serializing floating point types.
 
 GPB_INLINE int64_t GPBConvertDoubleToInt64(double v) {
@@ -174,9 +168,9 @@ GPB_INLINE BOOL GPBFieldStoresObject(GPBFieldDescriptor *field) {
   return GPBDataTypeIsObject(desc->dataType);
 }
 
-BOOL GPBGetHasIvar(GPBMessage *self, int32_t index, uint32_t fieldNumber);
+BOOL GPBGetHasIvar(GPBMessage *self, int32_t idx, uint32_t fieldNumber);
 void GPBSetHasIvar(GPBMessage *self, int32_t idx, uint32_t fieldNumber, BOOL value);
-uint32_t GPBGetHasOneof(GPBMessage *self, int32_t index);
+uint32_t GPBGetHasOneof(GPBMessage *self, int32_t idx);
 
 GPB_INLINE BOOL GPBGetHasIvarField(GPBMessage *self, GPBFieldDescriptor *field) {
   GPBMessageFieldDescription *fieldDesc = field->description_;

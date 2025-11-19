@@ -39,6 +39,7 @@
 #include "absl/log/absl_check.h"
 #include "absl/log/scoped_mock_log.h"
 #include "absl/strings/cord.h"
+#include "absl/strings/string_view.h"
 #include "absl/strings/substitute.h"
 #include "google/protobuf/arena.h"
 #include "google/protobuf/arena_test_util.h"
@@ -52,6 +53,7 @@
 #include "google/protobuf/io/zero_copy_stream_impl.h"
 #include "google/protobuf/message.h"
 #include "google/protobuf/reflection_ops.h"
+#include "google/protobuf/test_util.h"
 #include "google/protobuf/test_util2.h"
 #include "google/protobuf/wire_format_lite.h"
 
@@ -122,6 +124,36 @@ TEST(MESSAGE_TEST_NAME, SerializeHelpers) {
 
   EXPECT_TRUE(message.SerializeAsString() == str1);
 
+}
+
+inline void ExerciseReflectionOps(Message* msg) {
+  std::unique_ptr<Message> other(msg->New()), other2(msg->New());
+  internal::ReflectionOps::Copy(*msg, other.get());
+  internal::ReflectionOps::Clear(msg);
+  msg->GetReflection()->UnsafeArenaSwap(other.get(), other2.get());
+  msg->GetReflection()->Swap(msg, other2.get());
+  EXPECT_NE(0, msg->SpaceUsedLong());
+}
+
+TEST(MESSAGE_TEST_NAME, ReflectionAccessToAllFields) {
+  UNITTEST::TestAllTypes message;
+  UNITTEST::TestAllExtensions all_ext;
+  for (auto* msg :
+       {static_cast<Message*>(&message), static_cast<Message*>(&all_ext)}) {
+    TestUtil::ReflectionTester reflection_tester(msg->GetDescriptor());
+    reflection_tester.ExpectClearViaReflection(*msg);
+    reflection_tester.SetAllFieldsViaReflection(msg);
+    ExerciseReflectionOps(msg);
+    reflection_tester.ExpectAllFieldsSetViaReflection(*msg);
+    internal::ReflectionOps::Clear(msg);
+    reflection_tester.ExpectClearViaReflection(*msg);
+  }
+
+  UNITTEST::TestOneof2 oneof;
+  TestUtil::ReflectionTester::SetOneofViaReflection(&oneof);
+  ExerciseReflectionOps(&oneof);
+  TestUtil::ReflectionTester::ExpectOneofSetViaReflection(oneof);
+  internal::ReflectionOps::Clear(&oneof);
 }
 
 TEST(MESSAGE_TEST_NAME, RoundTrip) {
@@ -419,7 +451,8 @@ TEST(MESSAGE_TEST_NAME, UnparsedEmpty) {
   const char encoded[] = {'\042', 100};
   UNITTEST::NestedTestAllTypes message;
 
-  EXPECT_FALSE(message.ParseFromArray(encoded, sizeof(encoded)));
+  EXPECT_FALSE(
+      message.ParseFromString(absl::string_view(encoded, sizeof(encoded))));
   EXPECT_TRUE(message.has_lazy_child());
   EXPECT_EQ(message.lazy_child().ByteSizeLong(), 0);
 }
@@ -1059,16 +1092,16 @@ TEST(MESSAGE_TEST_NAME, ParseFailsOnInvalidMessageEnd) {
   UNITTEST::TestAllTypes message;
 
   // Control case.
-  EXPECT_TRUE(message.ParseFromArray("", 0));
+  EXPECT_TRUE(message.ParseFromString(""));
 
   // The byte is a valid varint, but not a valid tag (zero).
-  EXPECT_FALSE(message.ParseFromArray("\0", 1));
+  EXPECT_FALSE(message.ParseFromString(absl::string_view("\0", 1)));
 
   // The byte is a malformed varint.
-  EXPECT_FALSE(message.ParseFromArray("\200", 1));
+  EXPECT_FALSE(message.ParseFromString("\200"));
 
   // The byte is an endgroup tag, but we aren't parsing a group.
-  EXPECT_FALSE(message.ParseFromArray("\014", 1));
+  EXPECT_FALSE(message.ParseFromString("\014"));
 }
 
 // Regression test for b/23630858
@@ -1099,7 +1132,8 @@ TEST(MESSAGE_TEST_NAME, NonCanonicalTag) {
   UNITTEST::TestAllTypes message;
   // optional_lazy_message (27) LEN(3) with non canonical tag: (1).
   const char encoded[] = {'\332', 1, 3, '\210', 0, 0};
-  EXPECT_TRUE(message.ParseFromArray(encoded, sizeof(encoded)));
+  EXPECT_TRUE(
+      message.ParseFromString(absl::string_view(encoded, sizeof(encoded))));
 }
 
 TEST(MESSAGE_TEST_NAME, Zero5BTag) {
@@ -1107,7 +1141,8 @@ TEST(MESSAGE_TEST_NAME, Zero5BTag) {
   // optional_nested_message (18) LEN(6) with 5B but zero tag.
   const char encoded[] = {'\222', 1,      6,      '\200', '\200',
                           '\200', '\200', '\020', 0};
-  EXPECT_FALSE(message.ParseFromArray(encoded, sizeof(encoded)));
+  EXPECT_FALSE(
+      message.ParseFromString(absl::string_view(encoded, sizeof(encoded))));
 }
 
 TEST(MESSAGE_TEST_NAME, Zero5BTagLazy) {
@@ -1115,7 +1150,8 @@ TEST(MESSAGE_TEST_NAME, Zero5BTagLazy) {
   // optional_lazy_message (27) LEN(6) with 5B but zero tag.
   const char encoded[] = {'\332', 1,      6,      '\200', '\200',
                           '\200', '\200', '\020', 0};
-  EXPECT_FALSE(message.ParseFromArray(encoded, sizeof(encoded)));
+  EXPECT_FALSE(
+      message.ParseFromString(absl::string_view(encoded, sizeof(encoded))));
 }
 
 namespace {
@@ -1557,6 +1593,7 @@ template <typename T>
 static std::vector<const FieldDescriptor*> GetFields() {
   auto* descriptor = T::descriptor();
   std::vector<const FieldDescriptor*> fields;
+  fields.reserve(descriptor->field_count());
   for (int i = 0; i < descriptor->field_count(); ++i) {
     fields.push_back(descriptor->field(i));
   }
@@ -2077,6 +2114,90 @@ TEST(MESSAGE_TEST_NAME, TestRegressionOverwrittenLazyOneofDoesNotLeak) {
   EXPECT_TRUE(
       Arena::Create<UNITTEST::TestAllTypes>(&arena)->ParseFromString(str));
 }
+
+TEST(MESSAGE_TEST_NAME, AllSetMethodsOnStringField) {
+  UNITTEST::TestAllTypes msg;
+
+  msg.set_optional_string("Abcdef");
+  EXPECT_EQ(msg.optional_string(), "Abcdef");
+
+  msg.set_optional_string("Asciiz");
+  EXPECT_EQ(msg.optional_string(), "Asciiz");
+
+  std::string value = "std::string value 1";
+  msg.set_optional_string(value);
+  EXPECT_EQ(msg.optional_string(), "std::string value 1");
+
+  value = "std::string value 2";
+  msg.set_optional_string(std::cref(value));
+  EXPECT_EQ(msg.optional_string(), "std::string value 2");
+
+  value = "std::string value 3";
+  msg.set_optional_string(std::move(value));
+  EXPECT_EQ(msg.optional_string(), "std::string value 3");
+
+  msg.set_optional_string({'a', 'b', 'c'});
+  EXPECT_EQ(msg.optional_string(), "abc");
+}
+
+TEST(MESSAGE_TEST_NAME, AllSetMethodsOnRepeatedStringField) {
+  UNITTEST::TestAllTypes msg;
+
+  msg.add_repeated_string("");
+
+  msg.set_repeated_string(0, absl::string_view("Abcdef"));
+  EXPECT_EQ(msg.repeated_string(0), "Abcdef");
+
+  msg.set_repeated_string(0, "Asciiz");
+  EXPECT_EQ(msg.repeated_string(0), "Asciiz");
+
+  std::string value = "std::string value 1";
+  msg.set_repeated_string(0, value);
+  EXPECT_EQ(msg.repeated_string(0), "std::string value 1");
+
+  value = "std::string value 2";
+  msg.set_repeated_string(0, std::cref(value));
+  EXPECT_EQ(msg.repeated_string(0), "std::string value 2");
+
+  value = "std::string value 3";
+  msg.set_repeated_string(0, std::move(value));
+  EXPECT_EQ(msg.repeated_string(0), "std::string value 3");
+
+  msg.set_repeated_string(0, {'a', 'b', 'c'});
+  EXPECT_EQ(msg.repeated_string(0), "abc");
+}
+
+TEST(MESSAGE_TEST_NAME, AllAddMethodsOnRepeatedStringField) {
+  UNITTEST::TestAllTypes msg;
+
+  msg.add_repeated_string(absl::string_view("Abcdef"));
+  EXPECT_EQ(msg.repeated_string(0), "Abcdef");
+  msg.clear_repeated_string();
+
+  msg.add_repeated_string("Asciiz");
+  EXPECT_EQ(msg.repeated_string(0), "Asciiz");
+  msg.clear_repeated_string();
+
+  std::string value = "std::string value 1";
+  msg.add_repeated_string(value);
+  EXPECT_EQ(msg.repeated_string(0), "std::string value 1");
+  msg.clear_repeated_string();
+
+  value = "std::string value 2";
+  msg.add_repeated_string(std::cref(value));
+  EXPECT_EQ(msg.repeated_string(0), "std::string value 2");
+  msg.clear_repeated_string();
+
+  value = "std::string value 3";
+  msg.add_repeated_string(std::move(value));
+  EXPECT_EQ(msg.repeated_string(0), "std::string value 3");
+  msg.clear_repeated_string();
+
+  msg.add_repeated_string({'a', 'b', 'c'});
+  EXPECT_EQ(msg.repeated_string(0), "abc");
+  msg.clear_repeated_string();
+}
+
 
 }  // namespace protobuf
 }  // namespace google

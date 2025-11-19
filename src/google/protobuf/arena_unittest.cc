@@ -41,9 +41,11 @@
 #include "google/protobuf/message_lite.h"
 #include "google/protobuf/port.h"
 #include "google/protobuf/repeated_field.h"
+#include "google/protobuf/repeated_ptr_field.h"
 #include "google/protobuf/test_util.h"
 #include "google/protobuf/unittest.pb.h"
 #include "google/protobuf/unittest_arena.pb.h"
+#include "google/protobuf/unittest_import.pb.h"
 #include "google/protobuf/unknown_field_set.h"
 #include "google/protobuf/wire_format_lite.h"
 
@@ -53,16 +55,26 @@
 #include "google/protobuf/port_def.inc"
 
 using proto2_arena_unittest::ArenaMessage;
-using protobuf_unittest::NestedTestAllTypes;
-using protobuf_unittest::TestAllExtensions;
-using protobuf_unittest::TestAllTypes;
-using protobuf_unittest::TestEmptyMessage;
-using protobuf_unittest::TestOneof2;
-using protobuf_unittest::TestRepeatedString;
+using proto2_unittest::NestedTestAllTypes;
+using proto2_unittest::TestAllExtensions;
+using proto2_unittest::TestAllTypes;
+using proto2_unittest::TestEmptyMessage;
+using proto2_unittest::TestOneof2;
+using proto2_unittest::TestRepeatedString;
+using ::testing::AnyOf;
 using ::testing::ElementsAreArray;
+using ::testing::HasSubstr;
 
 namespace google {
 namespace protobuf {
+
+namespace {
+
+// Align n to next multiple of 8
+constexpr uint64_t Align8(uint64_t n) { return (n + 7) & -8; }
+
+}  // namespace
+
 
 class Notifier {
  public:
@@ -237,6 +249,14 @@ void TestCtorAndDtorTraits(std::vector<absl::string_view> def,
     Arena::Create<TraitsProber>(&arena, 17);
   }
   EXPECT_THAT(actions, ElementsAreArray(with_int));
+}
+
+TEST(ArenaTest, ZeroAllocDoesNotReturnNull) {
+  Arena arena;
+  EXPECT_NE(arena.AllocateAligned(0), nullptr);
+  // Try again after allocating some memory.
+  arena.AllocateAligned(10000);
+  EXPECT_NE(arena.AllocateAligned(0), nullptr);
 }
 
 TEST(ArenaTest, AllConstructibleAndDestructibleCombinationsWorkCorrectly) {
@@ -431,8 +451,10 @@ TEST(ArenaTest, MoveCtorOnArena) {
   TestUtil::ExpectAllFieldsSet(moved->payload());
 
   // The only extra allocation with moves is sizeof(NestedTestAllTypes).
-  EXPECT_EQ(usage_by_move, sizeof(NestedTestAllTypes));
-  EXPECT_LT(usage_by_move + sizeof(TestAllTypes), usage_original);
+  // Align up to 8 bytes to match default arena alignment, as sizeof(T) may not
+  // be a multiple of 8 on 32-bit platforms.
+  EXPECT_EQ(usage_by_move, Align8(sizeof(NestedTestAllTypes)));
+  EXPECT_LT(usage_by_move + Align8(sizeof(TestAllTypes)), usage_original);
 
   // Status after move is unspecified and must not be assumed. It's merely
   // checking current implementation specifics for protobuf internal.
@@ -480,8 +502,15 @@ TEST(ArenaTest, RepeatedPtrFieldMoveCtorOnArena) {
   TestUtil::ExpectAllFieldsSet(moved->Get(0));
 
   // The only extra allocation with moves is sizeof(RepeatedPtrField).
-  EXPECT_EQ(usage_by_move, sizeof(internal::RepeatedPtrFieldBase));
-  EXPECT_LT(usage_by_move + sizeof(TestAllTypes), usage_original);
+  // Align up to 8 bytes to match default arena alignment, as sizeof(T) may not
+  // be a multiple of 8 on 32-bit platforms.
+#ifdef PROTOBUF_INTERNAL_REMOVE_ARENA_PTRS_REPEATED_PTR_FIELD
+  EXPECT_EQ(usage_by_move,
+            Align8(sizeof(internal::RepeatedPtrFieldWithArena<TestAllTypes>)));
+#else
+  EXPECT_EQ(usage_by_move, Align8(sizeof(internal::RepeatedPtrFieldBase)));
+#endif
+  EXPECT_LT(usage_by_move + Align8(sizeof(TestAllTypes)), usage_original);
 
   // Status after move is unspecified and must not be assumed. It's merely
   // checking current implementation specifics for protobuf internal.
@@ -514,13 +543,13 @@ TEST(ArenaTest, GetConstructTypeWorks) {
   EXPECT_EQ(CT::kUnknown, (Peer::GetConstructType<int, const int&>()));
 }
 
-#ifdef __cpp_if_constexpr
 class DispatcherTestProto : public Message {
  public:
   using InternalArenaConstructable_ = void;
   using DestructorSkippable_ = void;
   // For the test below to construct.
-  explicit DispatcherTestProto(absl::in_place_t) : Message(nullptr, nullptr) {}
+  explicit constexpr DispatcherTestProto(absl::in_place_t)
+      : Message(static_cast<internal::ClassData*>(nullptr)) {}
   explicit DispatcherTestProto(Arena*) : Message(nullptr, nullptr) {
     ABSL_LOG(FATAL);
   }
@@ -532,6 +561,8 @@ class DispatcherTestProto : public Message {
     ABSL_LOG(FATAL);
   }
 };
+DispatcherTestProto dispatcher_test_proto_instance(absl::in_place);
+
 // We use a specialization to inject behavior for the test.
 // This test is very intrusive and will have to be fixed if we change the
 // implementation of CreateMessage.
@@ -539,18 +570,18 @@ absl::string_view hook_called;
 template <>
 void* Arena::DefaultConstruct<DispatcherTestProto>(Arena*) {
   hook_called = "default";
-  return nullptr;
+  return &dispatcher_test_proto_instance;
 }
 template <>
 void* Arena::CopyConstruct<DispatcherTestProto>(Arena*, const void*) {
   hook_called = "copy";
-  return nullptr;
+  return &dispatcher_test_proto_instance;
 }
 template <>
 DispatcherTestProto* Arena::CreateArenaCompatible<DispatcherTestProto, int>(
     Arena*, int&&) {
   hook_called = "fallback";
-  return nullptr;
+  return &dispatcher_test_proto_instance;
 }
 
 TEST(ArenaTest, CreateArenaConstructable) {
@@ -563,6 +594,18 @@ TEST(ArenaTest, CreateArenaConstructable) {
   TestUtil::ExpectAllFieldsSet(*copied);
   EXPECT_EQ(copied->GetArena(), &arena);
   EXPECT_EQ(copied->optional_nested_message().GetArena(), &arena);
+}
+
+TEST(ArenaTest, CreateArenaCheckFailsOnTooLargeInput) {
+  size_t max = std::numeric_limits<size_t>::max();
+
+  EXPECT_DEATH(Arena::CreateArray<double>(nullptr, max / sizeof(double) + 1),
+               "Requested size is too large to fit into size_t");
+
+  // For int32_t we trap even at this level because rounding up to 8 bytes will
+  // overflow.
+  EXPECT_DEATH(Arena::CreateArray<int32_t>(nullptr, max / sizeof(int32_t)),
+               "Requested size is too large to fit into size_t");
 }
 
 TEST(ArenaTest, CreateRepeatedPtrField) {
@@ -581,7 +624,7 @@ TEST(ArenaTest, CreateMessageDispatchesToSpecialFunctions) {
   Arena::Create<DispatcherTestProto>(nullptr);
   EXPECT_EQ(hook_called, "default");
 
-  DispatcherTestProto ref(absl::in_place);
+  DispatcherTestProto& ref = dispatcher_test_proto_instance;
   const DispatcherTestProto& cref = ref;
 
   hook_called = "";
@@ -600,7 +643,6 @@ TEST(ArenaTest, CreateMessageDispatchesToSpecialFunctions) {
   Arena::Create<DispatcherTestProto>(nullptr, 1);
   EXPECT_EQ(hook_called, "fallback");
 }
-#endif  // __cpp_if_constexpr
 
 TEST(ArenaTest, Parsing) {
   TestAllTypes original;
@@ -917,9 +959,12 @@ TEST(ArenaTest, SetAllocatedAcrossArenas) {
         Arena::Create<TestAllTypes::NestedMessage>(&arena2);
     arena2_submessage->set_bb(42);
 #if GTEST_HAS_DEATH_TEST
-    EXPECT_DEBUG_DEATH(arena1_message->set_allocated_optional_nested_message(
-                           arena2_submessage),
-                       "submessage_arena");
+    EXPECT_DEBUG_DEATH(
+        arena1_message->set_allocated_optional_nested_message(
+            arena2_submessage),
+        AnyOf(
+            HasSubstr("submessage_arena"),
+            HasSubstr("instance_arena == nullptr || instance_arena == arena")));
 #endif
     EXPECT_NE(arena2_submessage,
               arena1_message->mutable_optional_nested_message());
@@ -932,7 +977,8 @@ TEST(ArenaTest, SetAllocatedAcrossArenas) {
 #if GTEST_HAS_DEATH_TEST
   EXPECT_DEBUG_DEATH(
       heap_message->set_allocated_optional_nested_message(arena1_submessage),
-      "submessage_arena");
+      AnyOf(HasSubstr("submessage_arena"),
+            HasSubstr("instance_arena == nullptr || instance_arena == arena")));
 #endif
   EXPECT_NE(arena1_submessage, heap_message->mutable_optional_nested_message());
   delete heap_message;
@@ -1349,16 +1395,16 @@ TEST(ArenaTest, ArenaOneofReflection) {
 void TestSwapRepeatedField(Arena* arena1, Arena* arena2) {
   // Test "safe" (copying) semantics for direct Swap() on RepeatedPtrField
   // between arenas.
-  RepeatedPtrField<TestAllTypes> field1(arena1);
-  RepeatedPtrField<TestAllTypes> field2(arena2);
+  auto* field1 = Arena::Create<RepeatedPtrField<TestAllTypes>>(arena1);
+  auto* field2 = Arena::Create<RepeatedPtrField<TestAllTypes>>(arena2);
   for (int i = 0; i < 10; i++) {
     TestAllTypes* t = Arena::Create<TestAllTypes>(arena1);
     t->set_optional_string("field1");
     t->set_optional_int32(i);
     if (arena1 != nullptr) {
-      field1.UnsafeArenaAddAllocated(t);
+      field1->UnsafeArenaAddAllocated(t);
     } else {
-      field1.AddAllocated(t);
+      field1->AddAllocated(t);
     }
   }
   for (int i = 0; i < 5; i++) {
@@ -1366,22 +1412,29 @@ void TestSwapRepeatedField(Arena* arena1, Arena* arena2) {
     t->set_optional_string("field2");
     t->set_optional_int32(i);
     if (arena2 != nullptr) {
-      field2.UnsafeArenaAddAllocated(t);
+      field2->UnsafeArenaAddAllocated(t);
     } else {
-      field2.AddAllocated(t);
+      field2->AddAllocated(t);
     }
   }
-  field1.Swap(&field2);
-  EXPECT_EQ(5, field1.size());
-  EXPECT_EQ(10, field2.size());
-  EXPECT_TRUE(std::string("field1") == field2.Get(0).optional_string());
-  EXPECT_TRUE(std::string("field2") == field1.Get(0).optional_string());
+  field1->Swap(field2);
+  EXPECT_EQ(5, field1->size());
+  EXPECT_EQ(10, field2->size());
+  EXPECT_TRUE(std::string("field1") == field2->Get(0).optional_string());
+  EXPECT_TRUE(std::string("field2") == field1->Get(0).optional_string());
   // Ensure that fields retained their original order:
-  for (int i = 0; i < field1.size(); i++) {
-    EXPECT_EQ(i, field1.Get(i).optional_int32());
+  for (int i = 0; i < field1->size(); i++) {
+    EXPECT_EQ(i, field1->Get(i).optional_int32());
   }
-  for (int i = 0; i < field2.size(); i++) {
-    EXPECT_EQ(i, field2.Get(i).optional_int32());
+  for (int i = 0; i < field2->size(); i++) {
+    EXPECT_EQ(i, field2->Get(i).optional_int32());
+  }
+
+  if (arena1 == nullptr) {
+    delete field1;
+  }
+  if (arena2 == nullptr) {
+    delete field2;
   }
 }
 
@@ -1410,11 +1463,11 @@ TEST(ArenaTest, ExtensionsOnArena) {
   Arena arena;
   // Ensure no leaks.
   TestAllExtensions* message_ext = Arena::Create<TestAllExtensions>(&arena);
-  message_ext->SetExtension(protobuf_unittest::optional_int32_extension, 42);
-  message_ext->SetExtension(protobuf_unittest::optional_string_extension,
+  message_ext->SetExtension(proto2_unittest::optional_int32_extension, 42);
+  message_ext->SetExtension(proto2_unittest::optional_string_extension,
                             std::string("test"));
   message_ext
-      ->MutableExtension(protobuf_unittest::optional_nested_message_extension)
+      ->MutableExtension(proto2_unittest::optional_nested_message_extension)
       ->set_bb(42);
 }
 
@@ -1428,26 +1481,27 @@ TEST(ArenaTest, RepeatedFieldOnArena) {
     // Fill some repeated fields on the arena to test for leaks. Also that the
     // newly allocated memory is approximately the size of the cleanups for the
     // repeated messages.
-    RepeatedField<int32_t> repeated_int32(&arena);
-    RepeatedPtrField<TestAllTypes> repeated_message(&arena);
+    auto* repeated_int32 = Arena::Create<RepeatedField<int32_t>>(&arena);
+    auto* repeated_message =
+        Arena::Create<RepeatedPtrField<TestAllTypes>>(&arena);
     for (int i = 0; i < 100; i++) {
-      repeated_int32.Add(42);
-      repeated_message.Add()->set_optional_int32(42);
-      EXPECT_EQ(&arena, repeated_message.Get(0).GetArena());
-      const TestAllTypes* msg_in_repeated_field = &repeated_message.Get(0);
-      TestAllTypes* msg = repeated_message.UnsafeArenaReleaseLast();
+      repeated_int32->Add(42);
+      repeated_message->Add()->set_optional_int32(42);
+      EXPECT_EQ(&arena, repeated_message->Get(0).GetArena());
+      const TestAllTypes* msg_in_repeated_field = &repeated_message->Get(0);
+      TestAllTypes* msg = repeated_message->UnsafeArenaReleaseLast();
       EXPECT_EQ(msg_in_repeated_field, msg);
     }
 
     // UnsafeArenaExtractSubrange (i) should not leak and (ii) should return
     // on-arena pointers.
     for (int i = 0; i < 10; i++) {
-      repeated_message.Add()->set_optional_int32(42);
+      repeated_message->Add()->set_optional_int32(42);
     }
     TestAllTypes* extracted_messages[5];
-    repeated_message.UnsafeArenaExtractSubrange(0, 5, extracted_messages);
-    EXPECT_EQ(&arena, repeated_message.Get(0).GetArena());
-    EXPECT_EQ(5, repeated_message.size());
+    repeated_message->UnsafeArenaExtractSubrange(0, 5, extracted_messages);
+    EXPECT_EQ(&arena, repeated_message->Get(0).GetArena());
+    EXPECT_EQ(5, repeated_message->size());
     // Upper bound of the size of the cleanups of new repeated messages.
     const size_t upperbound_cleanup_size =
         2 * 110 * sizeof(internal::cleanup::CleanupNode);
@@ -1457,14 +1511,15 @@ TEST(ArenaTest, RepeatedFieldOnArena) {
 
   // Now test ExtractSubrange's copying semantics.
   {
-    RepeatedPtrField<TestAllTypes> repeated_message(&arena);
+    auto* repeated_message =
+        Arena::Create<RepeatedPtrField<TestAllTypes>>(&arena);
     for (int i = 0; i < 100; i++) {
-      repeated_message.Add()->set_optional_int32(42);
+      repeated_message->Add()->set_optional_int32(42);
     }
 
     TestAllTypes* extracted_messages[5];
     // ExtractSubrange should copy to the heap.
-    repeated_message.ExtractSubrange(0, 5, extracted_messages);
+    repeated_message->ExtractSubrange(0, 5, extracted_messages);
     EXPECT_EQ(nullptr, extracted_messages[0]->GetArena());
     // We need to free the heap-allocated messages to prevent a leak.
     for (int i = 0; i < 5; i++) {
@@ -1530,6 +1585,9 @@ TEST(ArenaTest, ClearOneofMessageOnArena) {
   if (!internal::DebugHardenClearOneofMessageOnArena()) {
     GTEST_SKIP() << "arena allocated oneof message fields are not hardened.";
   }
+  if (google::protobuf::internal::ForceEagerlyVerifiedLazyInProtoc()) {
+    GTEST_SKIP() << "Forced layout invalidates the test.";
+  }
 
   Arena arena;
   auto* message = Arena::Create<unittest::TestOneof2>(&arena);
@@ -1558,7 +1616,15 @@ TEST(ArenaTest, CopyValuesWithinOneof) {
   auto* foo = message->mutable_foogroup();
   foo->set_a(100);
   foo->set_b("hello world");
-  message->set_foo_string(message->foogroup().b());
+  if (internal::ForceInlineStringInProtoc() && internal::HasMemoryPoisoning()) {
+#if GTEST_HAS_DEATH_TEST
+    EXPECT_DEATH(message->set_foo_string(message->foogroup().b()),
+                 "use-after-poison");
+#endif  // !GTEST_HAS_DEATH_TEST
+    return;
+  } else {
+    message->set_foo_string(message->foogroup().b());
+  }
 
   // As a debug hardening measure, `set_foo_string` would clear `foo` in
   // (!NDEBUG && !ASAN) and the copy wouldn't work.
@@ -1639,9 +1705,6 @@ TEST(ArenaTest, MessageLiteOnArena) {
   arena.Reset();
 }
 #endif  // PROTOBUF_RTTI
-
-// Align n to next multiple of 8
-uint64_t Align8(uint64_t n) { return (n + 7) & -8; }
 
 TEST(ArenaTest, SpaceAllocated_and_Used) {
   Arena arena_1;

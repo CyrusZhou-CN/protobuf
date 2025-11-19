@@ -104,6 +104,11 @@ class FieldDescriptor
         return $this->label;
     }
 
+    public function isRequired()
+    {
+        return $this->label === GPBLabel::REQUIRED;
+    }
+
     public function isRepeated()
     {
         return $this->label === GPBLabel::REPEATED;
@@ -157,6 +162,15 @@ class FieldDescriptor
     public function setProto3Optional($proto3_optional)
     {
         $this->proto3_optional = $proto3_optional;
+    }
+
+    public function hasPresence()
+    {
+        if ($this->isRepeated()) {
+            return false;
+        }
+        return $this->getType() == GPBType::MESSAGE ||
+               !is_null($this->containing_oneof);
     }
 
     public function getContainingOneof()

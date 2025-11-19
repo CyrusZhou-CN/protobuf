@@ -4,7 +4,6 @@ load("@bazel_skylib//rules:common_settings.bzl", "string_flag")
 load("@rules_pkg//pkg:mappings.bzl", "pkg_filegroup", "pkg_files", "strip_prefix")
 load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
 load("//bazel/toolchains:proto_lang_toolchain.bzl", "proto_lang_toolchain")
-load("//rust:dist.bzl", "pkg_cross_compiled_binaries")
 
 licenses(["notice"])
 
@@ -60,7 +59,6 @@ PROTOBUF_SHARED = [
     "optional.rs",
     "prelude.rs",
     "primitive.rs",
-    "proto_macro.rs",
     "proxied.rs",
     "repeated.rs",
     "shared.rs",
@@ -90,6 +88,7 @@ rust_library(
     srcs = PROTOBUF_SHARED + ["upb.rs"],
     crate_root = "shared.rs",
     proc_macro_deps = [
+        "//rust/protobuf_macros",
         "@crate_index//:paste",
     ],
     rustc_flags = [
@@ -136,6 +135,7 @@ rust_library(
     srcs = PROTOBUF_SHARED + ["cpp.rs"],
     crate_root = "shared.rs",
     proc_macro_deps = [
+        "//rust/protobuf_macros",
         "@crate_index//:paste",
     ],
     rustc_flags = [
@@ -224,6 +224,8 @@ proto_lang_toolchain(
     name = "proto_rust_upb_toolchain",
     command_line = "--rust_out=$(OUT)",
     output_files = "multiple",
+    plugin = "//src/google/protobuf/compiler/rust:protoc-gen-rust",
+    plugin_format_flag = "--plugin=protoc-gen-rust=%s",
     progress_message = "Generating Rust proto_library %{label}",
     runtime = ":protobuf_upb",
     visibility = ["//visibility:public"],
@@ -233,6 +235,8 @@ proto_lang_toolchain(
     name = "proto_rust_cpp_toolchain",
     command_line = "--rust_out=$(OUT)",
     output_files = "multiple",
+    plugin = "//src/google/protobuf/compiler/rust:protoc-gen-rust",
+    plugin_format_flag = "--plugin=protoc-gen-rust=%s",
     progress_message = "Generating Rust proto_library %{label}",
     runtime = ":protobuf_cpp",
     visibility = ["//visibility:public"],
@@ -258,6 +262,7 @@ config_setting(
     flag_values = {
         ":rust_proto_library_kernel": "upb",
     },
+    visibility = ["//:__subpackages__"],
 )
 
 pkg_files(
@@ -270,7 +275,7 @@ pkg_filegroup(
     name = "rust_protobuf_src_dir",
     srcs = [
         ":rust_protobuf_src",
-        "//rust/upb:rust_protobuf_upb_src",
+        "//rust/upb:src",
     ],
     prefix = "src",
     visibility = ["//rust/release_crates:__subpackages__"],
@@ -290,4 +295,9 @@ pkg_filegroup(
     ],
     prefix = "libupb",
     visibility = ["//rust/release_crates:__subpackages__"],
+)
+
+alias(
+    name = "release",
+    actual = "//rust/release_crates:workspace",
 )

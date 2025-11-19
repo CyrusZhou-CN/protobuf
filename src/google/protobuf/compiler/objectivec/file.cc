@@ -43,7 +43,7 @@ namespace objectivec {
 namespace {
 
 // This is also found in GPBBootstrap.h, and needs to be kept in sync.
-const int32_t GOOGLE_PROTOBUF_OBJC_VERSION = 30007;
+const int32_t GOOGLE_PROTOBUF_OBJC_VERSION = 40311;
 
 const char* kHeaderExtension = ".pbobjc.h";
 
@@ -472,7 +472,7 @@ void FileGenerator::GenerateSourceForEnums(io::Printer* p) const {
   });
 }
 
-void FileGenerator::GenerateSourceForMessage(int idx, io::Printer* p) const {
+void FileGenerator::GenerateSourceForMessage(size_t idx, io::Printer* p) const {
   ABSL_CHECK(!is_bundled_proto_)
       << "Bundled protos aren't expected to use multi source generation.";
   const auto& generator = message_generators_[idx];
@@ -607,6 +607,9 @@ void FileGenerator::GenerateFile(io::Printer* p, GeneratedFileType file_type,
        // then honor the directives within the generators sources.
        "clangfmt", "clang-format"},
       {"root_class_name", root_class_name_},
+      {"google_protobuf_runtime_support",
+       absl::StrCat("GOOGLE_PROTOBUF_OBJC_EXPECTED_GENCODE_VERSION_",
+                    GOOGLE_PROTOBUF_OBJC_VERSION)},
   });
 
   p->Emit(
@@ -740,7 +743,7 @@ void FileGenerator::EmitRootExtensionRegistryImplementation(
                    for (size_t i = 0; i < sizeof(descriptions) / sizeof(descriptions[0]); ++i) {
                      GPBExtensionDescriptor *extension =
                          [[GPBExtensionDescriptor alloc] initWithExtensionDescription:&descriptions[i]
-                                                                        usesClassRefs:YES];
+                                                                       runtimeSupport:&$google_protobuf_runtime_support$];
                      [registry addExtension:extension];
                      [self globallyRegisterExtension:extension];
                      [extension release];
@@ -773,7 +776,6 @@ void FileGenerator::EmitRootExtensionRegistryImplementation(
           // about thread safety and initialization of registry.
           static GPBExtensionRegistry* registry = nil;
           if (!registry) {
-            GPB_DEBUG_CHECK_RUNTIME_VERSIONS();
             registry = [[GPBExtensionRegistry alloc] init];
             $register_local_extensions$;
             $register_imports$
@@ -819,13 +821,11 @@ void FileGenerator::EmitFileDescription(io::Printer* p) const {
            {"prefix_value",
             objc_prefix.empty() && !file_->options().has_objc_class_prefix()
                 ? "NULL"
-                : absl::StrCat("\"", objc_prefix, "\"")},
-           {"syntax", syntax}},
+                : absl::StrCat("\"", objc_prefix, "\"")}},
           R"objc(
-            static GPBFileDescription $file_description_name$ = {
+            static GPBFilePackageAndPrefix $file_description_name$ = {
               .package = $package_value$,
-              .prefix = $prefix_value$,
-              .syntax = $syntax$
+              .prefix = $prefix_value$
             };
           )objc");
   p->Emit("\n");
@@ -836,8 +836,17 @@ void FileGenerator::DetermineNeededDeps(
     PublicDepsHandling public_deps_handling) const {
   // This logic captures the deps that are needed for types thus removing the
   // ones that are only deps because they provide the definitions for custom
-  // options. If protoc gets something like "import options" then this logic can
-  // go away as the non "import options" deps would be the ones needed.
+  // options.
+  //
+  // However, this as the side effect of if something was needed and it was
+  // coming from a `import public` *within* an `import`, then a `#import` will
+  // be generated for that otherwise transitive import. If some build system
+  // wants to do some sort of strict layering checks on the generated code, then
+  // it will fail those checks.
+  //
+  // Since the original intent of this "mode" was to help prune out headers for
+  // custom options, and protobuf now does support `import option`, it likely
+  // makes sense to remove this in the future instead.
 
   if (public_deps_handling == PublicDepsHandling::kForceInclude) {
     for (int i = 0; i < file_->public_dependency_count(); i++) {

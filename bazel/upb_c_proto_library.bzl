@@ -1,10 +1,14 @@
 """upb_c_proto_library() exposes upb's generated C API for protobuf (foo.upb.h)"""
 
+load("@rules_cc//cc/common:cc_info.bzl", "CcInfo")
 load("//bazel:upb_minitable_proto_library.bzl", "UpbMinitableCcInfo", "upb_minitable_proto_library_aspect")
+load("//bazel:visibility.bzl", "upb_clients")
 load("//bazel/common:proto_info.bzl", "ProtoInfo")
 load("//bazel/private:upb_proto_library_internal/aspect.bzl", "upb_proto_aspect_impl")
 load("//bazel/private:upb_proto_library_internal/cc_library_func.bzl", "upb_use_cpp_toolchain")
 load("//bazel/private:upb_proto_library_internal/rule.bzl", "upb_proto_rule_impl")
+
+visibility(upb_clients)
 
 UpbWrappedCcInfo = provider(
     "Provider for cc_info for protos",
@@ -30,7 +34,7 @@ def _upb_c_proto_library_aspect_impl(target, ctx):
 upb_c_proto_library_aspect = aspect(
     attrs = {
         "_copts": attr.label(
-            default = "//upb:upb_proto_library_copts__for_generated_code_only_do_not_use",
+            default = "//upb:upb_proto_library_copts",
         ),
         "_upb_toolchain": attr.label(
             default = Label("//upb_generator/c:toolchain"),
@@ -52,6 +56,7 @@ upb_c_proto_library_aspect = aspect(
     exec_groups = {
         "proto_compiler": exec_group(),
     },
+    required_providers = [ProtoInfo],
 )
 
 def _upb_c_proto_library_rule_impl(ctx):

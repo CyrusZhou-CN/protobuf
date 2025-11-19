@@ -11,13 +11,14 @@
 
 #include <cstddef>
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 
 #include "absl/log/absl_check.h"
 #include "absl/log/absl_log.h"
 #include "absl/memory/memory.h"
-#include "absl/types/optional.h"
+#include "absl/strings/string_view.h"
 #include "google/protobuf/compiler/cpp/field.h"
 #include "google/protobuf/compiler/cpp/field_generators/generators.h"
 #include "google/protobuf/compiler/cpp/helpers.h"
@@ -26,6 +27,10 @@
 #include "google/protobuf/descriptor.pb.h"
 #include "google/protobuf/io/printer.h"
 #include "google/protobuf/wire_format.h"
+#include "google/protobuf/wire_format_lite.h"
+
+// Must be included last.
+#include "google/protobuf/port_def.inc"
 
 namespace google {
 namespace protobuf {
@@ -38,7 +43,7 @@ using Sub = ::google::protobuf::io::Printer::Sub;
 using Semantic = ::google::protobuf::io::AnnotationCollector::Semantic;
 
 // For encodings with fixed sizes, returns that size in bytes.
-absl::optional<size_t> FixedSize(FieldDescriptor::Type type) {
+std::optional<size_t> FixedSize(FieldDescriptor::Type type) {
   switch (type) {
     case FieldDescriptor::TYPE_INT32:
     case FieldDescriptor::TYPE_INT64:
@@ -51,7 +56,7 @@ absl::optional<size_t> FixedSize(FieldDescriptor::Type type) {
     case FieldDescriptor::TYPE_BYTES:
     case FieldDescriptor::TYPE_GROUP:
     case FieldDescriptor::TYPE_MESSAGE:
-      return absl::nullopt;
+      return std::nullopt;
 
     case FieldDescriptor::TYPE_FIXED32:
       return WireFormatLite::kFixed32Size;
@@ -73,7 +78,7 @@ absl::optional<size_t> FixedSize(FieldDescriptor::Type type) {
   }
 
   ABSL_LOG(FATAL) << "Can't get here.";
-  return absl::nullopt;
+  return std::nullopt;
 }
 
 std::vector<Sub> Vars(const FieldDescriptor* field, const Options& options) {
@@ -121,16 +126,6 @@ class SingularPrimitive final : public FieldGeneratorBase {
     p->Emit(R"cc(
       //~ A `using std::swap;` is already present in this function.
       swap($field_$, other->$field_$);
-    )cc");
-  }
-
-  void GenerateConstructorCode(io::Printer* p) const override {
-    if (!is_oneof()) {
-      return;
-    }
-
-    p->Emit(R"cc(
-      $pkg$::_$Msg$_default_instance_.$field_$ = $kDefault$;
     )cc");
   }
 
@@ -286,6 +281,7 @@ void SingularPrimitive::GenerateByteSize(io::Printer* p) const {
   )cc");
 }
 
+
 class RepeatedPrimitive final : public FieldGeneratorBase {
  public:
   RepeatedPrimitive(const FieldDescriptor* field, const Options& opts,
@@ -337,8 +333,6 @@ class RepeatedPrimitive final : public FieldGeneratorBase {
     }
   }
 
-  void GenerateConstructorCode(io::Printer* p) const override {}
-
   void GenerateCopyConstructorCode(io::Printer* p) const override {
     if (should_split()) {
       p->Emit(R"cc(
@@ -358,9 +352,14 @@ class RepeatedPrimitive final : public FieldGeneratorBase {
 
   void GenerateAggregateInitializer(io::Printer* p) const override {
     ABSL_CHECK(!should_split());
-    p->Emit(R"cc(
-      decltype($field_$){arena},
-    )cc");
+    p->Emit({InternalMetadataOffsetSub(p)},
+            R"cc(
+#ifdef PROTOBUF_INTERNAL_REMOVE_ARENA_PTRS_REPEATED_FIELD
+              decltype($field_$){$internal_metadata_offset$},
+#else
+              decltype($field_$){arena},
+#endif
+            )cc");
     GenerateCacheSizeInitializer(p);
   }
 
@@ -373,21 +372,41 @@ class RepeatedPrimitive final : public FieldGeneratorBase {
   }
 
   void GenerateMemberConstexprConstructor(io::Printer* p) const override {
-    p->Emit("$name$_{}");
+    p->Emit({InternalMetadataOffsetSub(p)},
+            R"cc(
+#ifdef PROTOBUF_INTERNAL_REMOVE_ARENA_PTRS_REPEATED_FIELD
+              $name$_{visibility, $internal_metadata_offset$}
+#else
+              $name$_ {}
+#endif
+            )cc");
     if (HasCachedSize()) {
       p->Emit(",\n_$name$_cached_byte_size_{0}");
     }
   }
 
   void GenerateMemberConstructor(io::Printer* p) const override {
-    p->Emit("$name$_{visibility, arena}");
+    p->Emit({InternalMetadataOffsetSub(p)},
+            R"cc(
+#ifdef PROTOBUF_INTERNAL_REMOVE_ARENA_PTRS_REPEATED_FIELD
+              $name$_{visibility, $internal_metadata_offset$}
+#else
+              $name$_ { visibility, arena }
+#endif
+            )cc");
     if (HasCachedSize()) {
       p->Emit(",\n_$name$_cached_byte_size_{0}");
     }
   }
 
   void GenerateMemberCopyConstructor(io::Printer* p) const override {
-    p->Emit("$name$_{visibility, arena, from.$name$_}");
+    p->Emit({InternalMetadataOffsetSub(p)},
+            R"cc(
+#ifdef PROTOBUF_INTERNAL_REMOVE_ARENA_PTRS_REPEATED_FIELD
+              $name$_{visibility, $internal_metadata_offset$, from.$name$_}
+#else
+              $name$_ { visibility, arena, from.$name$_ }
+#endif)cc");
     if (HasCachedSize()) {
       p->Emit(",\n_$name$_cached_byte_size_{0}");
     }
@@ -475,6 +494,9 @@ void RepeatedPrimitive::GenerateInlineAccessorDefinitions(
     }
   )cc");
   p->Emit(R"cc(
+    //~ Note: no need to set hasbit in set_$name$(int index). Hasbits only need
+    //~ to be updated if a new element is (potentially) added, not if an
+    //~ existing element is mutated.
     inline void $Msg$::set_$name$(int index, $Type$ value) {
       $WeakDescriptorSelfPin$;
       $annotate_set$;
@@ -486,7 +508,9 @@ void RepeatedPrimitive::GenerateInlineAccessorDefinitions(
     inline void $Msg$::add_$name$($Type$ value) {
       $WeakDescriptorSelfPin$;
       $TsanDetectConcurrentMutation$;
-      _internal_mutable_$name_internal$()->Add(value);
+      _internal_mutable_$name_internal$()->InternalAddWithArena(
+          internal_visibility(), GetArena(), value);
+      $set_hasbit$;
       $annotate_add$;
       // @@protoc_insertion_point(field_add:$pkg.Msg.field$)
     }
@@ -504,6 +528,7 @@ void RepeatedPrimitive::GenerateInlineAccessorDefinitions(
     inline $pb$::RepeatedField<$Type$>* $nonnull$ $Msg$::mutable_$name$()
         ABSL_ATTRIBUTE_LIFETIME_BOUND {
       $WeakDescriptorSelfPin$;
+      $set_hasbit$;
       $annotate_mutable_list$;
       // @@protoc_insertion_point(field_mutable_list:$pkg.Msg.field$)
       $TsanDetectConcurrentMutation$;
@@ -610,7 +635,7 @@ void RepeatedPrimitive::GenerateByteSize(io::Printer* p) const {
              auto fixed_size = FixedSize(field_->type());
              if (fixed_size.has_value()) {
                p->Emit({{"kFixed", *fixed_size}}, R"cc(
-                 std::size_t{$kFixed$} *
+                 ::size_t{$kFixed$} *
                      ::_pbi::FromIntSize(this_._internal_$name$_size());
                )cc");
              } else {
@@ -631,15 +656,15 @@ void RepeatedPrimitive::GenerateByteSize(io::Printer* p) const {
                )cc");
              } else {
                p->Emit(R"cc(
-                 std::size_t{$kTagBytes$} *
+                 ::size_t{$kTagBytes$} *
                      ::_pbi::FromIntSize(this_._internal_$name$_size());
                )cc");
              }
            }},
       },
       R"cc(
-        std::size_t data_size = $data_size$;
-        std::size_t tag_size = $tag_size$;
+        ::size_t data_size = $data_size$;
+        ::size_t tag_size = $tag_size$;
         total_size += tag_size + data_size;
       )cc");
 }
@@ -661,3 +686,5 @@ std::unique_ptr<FieldGeneratorBase> MakeRepeatedPrimitiveGenerator(
 }  // namespace compiler
 }  // namespace protobuf
 }  // namespace google
+
+#include "google/protobuf/port_undef.inc"

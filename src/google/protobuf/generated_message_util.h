@@ -21,8 +21,10 @@
 #include <atomic>
 #include <climits>
 #include <cstddef>
+#include <cstdint>
 #include <initializer_list>
 #include <memory>
+#include <optional>
 #include <string>
 #include <type_traits>
 #include <utility>
@@ -33,10 +35,10 @@
 #include "absl/base/casts.h"
 #include "absl/base/optimization.h"
 #include "absl/strings/string_view.h"
-#include "absl/types/optional.h"
 #include "google/protobuf/any.h"
 #include "google/protobuf/has_bits.h"
 #include "google/protobuf/implicit_weak_message.h"
+#include "google/protobuf/internal_visibility.h"
 #include "google/protobuf/message_lite.h"
 #include "google/protobuf/port.h"
 #include "google/protobuf/repeated_field.h"
@@ -151,9 +153,9 @@ PROTOBUF_EXPORT MessageLite* DuplicateIfNonNullInternal(MessageLite* message);
 PROTOBUF_EXPORT MessageLite* GetOwnedMessageInternal(Arena* message_arena,
                                                      MessageLite* submessage,
                                                      Arena* submessage_arena);
-PROTOBUF_EXPORT void GenericSwap(MessageLite* m1, MessageLite* m2);
+PROTOBUF_EXPORT void GenericSwap(MessageLite* lhs, MessageLite* rhs);
 // We specialize GenericSwap for non-lite messages to benefit from reflection.
-PROTOBUF_EXPORT void GenericSwap(Message* m1, Message* m2);
+PROTOBUF_EXPORT void GenericSwap(Message* lhs, Message* rhs);
 
 template <typename T>
 T* DuplicateIfNonNull(T* message) {
@@ -340,15 +342,15 @@ struct BytesTag {
 // This overload set is used to implement `set_xxx()` methods for repeated
 // string fields in generated code.
 inline void AssignToString(std::string& dest, const std::string& value,
-                           BytesTag tag = BytesTag{}) {
+                           BytesTag /*tag*/ = BytesTag{}) {
   dest.assign(value);
 }
 inline void AssignToString(std::string& dest, std::string&& value,
-                           BytesTag tag = BytesTag{}) {
+                           BytesTag /*tag*/ = BytesTag{}) {
   dest.assign(std::move(value));
 }
 inline void AssignToString(std::string& dest, const char* value,
-                           BytesTag tag = BytesTag{}) {
+                           BytesTag /*tag*/ = BytesTag{}) {
   dest.assign(value);
 }
 inline void AssignToString(std::string& dest, const char* value,
@@ -356,11 +358,11 @@ inline void AssignToString(std::string& dest, const char* value,
   dest.assign(value, size);
 }
 inline void AssignToString(std::string& dest, const void* value,
-                           std::size_t size, BytesTag tag) {
+                           std::size_t size, BytesTag /*tag*/) {
   dest.assign(reinterpret_cast<const char*>(value), size);
 }
 inline void AssignToString(std::string& dest, absl::string_view value,
-                           BytesTag tag = BytesTag{}) {
+                           BytesTag /*tag*/ = BytesTag{}) {
   dest.assign(value.data(), value.size());
 }
 
@@ -368,28 +370,37 @@ inline void AssignToString(std::string& dest, absl::string_view value,
 // This overload set is used to implement `add_xxx()` methods for repeated
 // string fields in generated code.
 template <typename Arg, typename... Args>
-void AddToRepeatedPtrField(google::protobuf::RepeatedPtrField<std::string>& dest,
+void AddToRepeatedPtrField(InternalVisibility visibility, google::protobuf::Arena* arena,
+                           google::protobuf::RepeatedPtrField<std::string>& dest,
                            Arg&& value, Args... args) {
-  AssignToString(*dest.Add(), std::forward<Arg>(value), args...);
+  AssignToString(*dest.InternalAddWithArena(visibility, arena),
+                 std::forward<Arg>(value), args...);
 }
-inline void AddToRepeatedPtrField(google::protobuf::RepeatedPtrField<std::string>& dest,
+inline void AddToRepeatedPtrField(InternalVisibility visibility,
+                                  google::protobuf::Arena* arena,
+                                  google::protobuf::RepeatedPtrField<std::string>& dest,
                                   std::string&& value,
-                                  BytesTag tag = BytesTag{}) {
-  dest.Add(std::move(value));
+                                  BytesTag /*tag*/ = BytesTag{}) {
+  dest.InternalAddWithArena(visibility, arena, std::move(value));
 }
 
-constexpr absl::optional<uintptr_t> EncodePlacementArenaOffsets(
+constexpr std::optional<uintptr_t> EncodePlacementArenaOffsets(
     std::initializer_list<size_t> offsets) {
   uintptr_t arena_bits = 0;
   for (size_t offset : offsets) {
     offset /= sizeof(Arena*);
     if (offset >= sizeof(arena_bits) * 8) {
-      return absl::nullopt;
+      return std::nullopt;
     }
     arena_bits |= uintptr_t{1} << offset;
   }
   return arena_bits;
 }
+
+// The struct PrivateAccess is used to provide access to private members of
+// message classes without making them public. This is useful for highly
+// optimized code paths that need to access internals.
+struct PrivateAccess {};
 
 }  // namespace internal
 }  // namespace protobuf

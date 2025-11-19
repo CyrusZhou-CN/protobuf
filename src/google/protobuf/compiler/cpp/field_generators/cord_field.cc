@@ -26,6 +26,9 @@
 #include "google/protobuf/compiler/cpp/options.h"
 #include "google/protobuf/descriptor.h"
 
+// Must be included last.
+#include "google/protobuf/port_def.inc"
+
 namespace google {
 namespace protobuf {
 namespace compiler {
@@ -64,7 +67,6 @@ class CordFieldGenerator : public FieldGeneratorBase {
   void GenerateClearingCode(io::Printer* printer) const override;
   void GenerateMergingCode(io::Printer* printer) const override;
   void GenerateSwappingCode(io::Printer* printer) const override;
-  void GenerateConstructorCode(io::Printer* printer) const override;
   void GenerateArenaDestructorCode(io::Printer* printer) const override;
   void GenerateSerializeWithCachedSizesToArray(
       io::Printer* printer) const override;
@@ -123,7 +125,6 @@ class CordOneofFieldGenerator : public CordFieldGenerator {
   void GenerateClearingCode(io::Printer* printer) const override;
   void GenerateSwappingCode(io::Printer* printer) const override;
   void GenerateMergingCode(io::Printer* printer) const override;
-  void GenerateConstructorCode(io::Printer* printer) const override {}
   void GenerateArenaDestructorCode(io::Printer* printer) const override;
   // Overrides CordFieldGenerator behavior.
   ArenaDtorNeeds NeedsArenaDestructor() const override {
@@ -241,15 +242,6 @@ void CordFieldGenerator::GenerateSwappingCode(io::Printer* printer) const {
   format("$field$.swap(other->$field$);\n");
 }
 
-void CordFieldGenerator::GenerateConstructorCode(io::Printer* printer) const {
-  ABSL_CHECK(!should_split());
-  Formatter format(printer, variables_);
-  if (!field_->default_value_string().empty()) {
-    format("$field$ = ::absl::string_view($default$, $default_length$);\n");
-  }
-}
-
-
 void CordFieldGenerator::GenerateArenaDestructorCode(
     io::Printer* printer) const {
   Formatter format(printer, variables_);
@@ -279,6 +271,7 @@ void CordFieldGenerator::GenerateByteSize(io::Printer* printer) const {
       "  $pbi$::WireFormatLite::$declared_type$Size(\n"
       "    this_._internal_$name$());\n");
 }
+
 
 void CordFieldGenerator::GenerateConstexprAggregateInitializer(
     io::Printer* p) const {
@@ -473,3 +466,5 @@ std::unique_ptr<FieldGeneratorBase> MakeOneofCordGenerator(
 }  // namespace compiler
 }  // namespace protobuf
 }  // namespace google
+
+#include "google/protobuf/port_undef.inc"

@@ -11,18 +11,18 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
-#include <memory>
+#include <limits>
+#include <random>
 #include <string>
 #include <type_traits>
 #include <utility>
-#include <vector>
 
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
-#include "absl/container/flat_hash_set.h"
+#include "absl/random/distributions.h"
+#include "absl/random/random.h"
 #include "absl/strings/str_cat.h"
 #include "google/protobuf/arena_test_util.h"
-#include "google/protobuf/internal_visibility_for_testing.h"
 #include "google/protobuf/map_field.h"
 #include "google/protobuf/map_proto2_unittest.pb.h"
 #include "google/protobuf/map_unittest.pb.h"
@@ -31,14 +31,12 @@
 #include "google/protobuf/unittest_import.pb.h"
 
 
-#define UNITTEST ::protobuf_unittest
-#define UNITTEST_IMPORT ::protobuf_unittest_import
-#define UNITTEST_PACKAGE_NAME "protobuf_unittest"
+#define UNITTEST ::proto2_unittest
+#define UNITTEST_IMPORT ::proto2_unittest_import
+#define UNITTEST_PACKAGE_NAME "proto2_unittest"
 
 // Must include after defining UNITTEST, etc.
 // clang-format off
-#include "google/protobuf/test_util.inc"
-#include "google/protobuf/map_test_util.inc"
 #include "google/protobuf/map_test.inc"
 // clang-format on
 
@@ -58,7 +56,6 @@ using ::testing::UnorderedElementsAre;
 using ::testing::UnorderedElementsAreArray;
 
 TEST(MapTest, CopyConstructIntegers) {
-  auto token = internal::InternalVisibilityForTesting{};
   using MapType = Map<int32_t, int32_t>;
   MapType original;
   original[1] = 2;
@@ -69,14 +66,15 @@ TEST(MapTest, CopyConstructIntegers) {
   EXPECT_EQ(map1[1], 2);
   EXPECT_EQ(map1[2], 3);
 
-  MapType map2(token, nullptr, original);
-  ASSERT_EQ(map2.size(), 2);
-  EXPECT_EQ(map2[1], 2);
-  EXPECT_EQ(map2[2], 3);
+  auto* map2 = Arena::Create<MapType>(nullptr, original);
+  ASSERT_EQ(map2->size(), 2);
+  EXPECT_EQ((*map2)[1], 2);
+  EXPECT_EQ((*map2)[2], 3);
+
+  delete map2;
 }
 
 TEST(MapTest, CopyConstructStrings) {
-  auto token = internal::InternalVisibilityForTesting{};
   using MapType = Map<std::string, std::string>;
   MapType original;
   original["1"] = "2";
@@ -87,14 +85,15 @@ TEST(MapTest, CopyConstructStrings) {
   EXPECT_EQ(map1["1"], "2");
   EXPECT_EQ(map1["2"], "3");
 
-  MapType map2(token, nullptr, original);
-  ASSERT_EQ(map2.size(), 2);
-  EXPECT_EQ(map2["1"], "2");
-  EXPECT_EQ(map2["2"], "3");
+  auto* map2 = Arena::Create<MapType>(nullptr, original);
+  ASSERT_EQ(map2->size(), 2);
+  EXPECT_EQ((*map2)["1"], "2");
+  EXPECT_EQ((*map2)["2"], "3");
+
+  delete map2;
 }
 
 TEST(MapTest, CopyConstructMessages) {
-  auto token = internal::InternalVisibilityForTesting{};
   using MapType = Map<std::string, TestAllTypes>;
   MapType original;
   original["1"].set_optional_int32(1);
@@ -105,58 +104,54 @@ TEST(MapTest, CopyConstructMessages) {
   EXPECT_EQ(map1["1"].optional_int32(), 1);
   EXPECT_EQ(map1["2"].optional_int32(), 2);
 
-  MapType map2(token, nullptr, original);
-  ASSERT_EQ(map2.size(), 2);
-  EXPECT_EQ(map2["1"].optional_int32(), 1);
-  EXPECT_EQ(map2["2"].optional_int32(), 2);
+  auto* map2 = Arena::Create<MapType>(nullptr, original);
+  ASSERT_EQ(map2->size(), 2);
+  EXPECT_EQ((*map2)["1"].optional_int32(), 1);
+  EXPECT_EQ((*map2)["2"].optional_int32(), 2);
+
+  delete map2;
 }
 
 TEST(MapTest, CopyConstructIntegersWithArena) {
-  auto token = internal::InternalVisibilityForTesting{};
   using MapType = Map<int32_t, int32_t>;
   MapType original;
   original[1] = 2;
   original[2] = 3;
 
   Arena arena;
-  alignas(MapType) char mem1[sizeof(MapType)];
-  MapType& map1 = *new (mem1) MapType(token, &arena, original);
-  ASSERT_EQ(map1.size(), 2);
-  EXPECT_EQ(map1[1], 2);
-  EXPECT_EQ(map1[2], 3);
-  EXPECT_EQ(map1[2], 3);
+  auto* map1 = Arena::Create<MapType>(&arena, original);
+  ASSERT_EQ(map1->size(), 2);
+  EXPECT_EQ((*map1)[1], 2);
+  EXPECT_EQ((*map1)[2], 3);
+  EXPECT_EQ((*map1)[2], 3);
 }
 
 TEST(MapTest, CopyConstructStringsWithArena) {
-  auto token = internal::InternalVisibilityForTesting{};
   using MapType = Map<std::string, std::string>;
   MapType original;
   original["1"] = "2";
   original["2"] = "3";
 
   Arena arena;
-  alignas(MapType) char mem1[sizeof(MapType)];
-  MapType& map1 = *new (mem1) MapType(token, &arena, original);
-  ASSERT_EQ(map1.size(), 2);
-  EXPECT_EQ(map1["1"], "2");
-  EXPECT_EQ(map1["2"], "3");
+  auto* map1 = Arena::Create<MapType>(&arena, original);
+  ASSERT_EQ(map1->size(), 2);
+  EXPECT_EQ((*map1)["1"], "2");
+  EXPECT_EQ((*map1)["2"], "3");
 }
 
 TEST(MapTest, CopyConstructMessagesWithArena) {
-  auto token = internal::InternalVisibilityForTesting{};
   using MapType = Map<std::string, TestAllTypes>;
   MapType original;
   original["1"].set_optional_int32(1);
   original["2"].set_optional_int32(2);
 
   Arena arena;
-  alignas(MapType) char mem1[sizeof(MapType)];
-  MapType& map1 = *new (mem1) MapType(token, &arena, original);
-  ASSERT_EQ(map1.size(), 2);
-  EXPECT_EQ(map1["1"].optional_int32(), 1);
-  EXPECT_EQ(map1["1"].GetArena(), &arena);
-  EXPECT_EQ(map1["2"].optional_int32(), 2);
-  EXPECT_EQ(map1["2"].GetArena(), &arena);
+  auto* map1 = Arena::Create<MapType>(&arena, original);
+  ASSERT_EQ(map1->size(), 2);
+  EXPECT_EQ((*map1)["1"].optional_int32(), 1);
+  EXPECT_EQ((*map1)["1"].GetArena(), &arena);
+  EXPECT_EQ((*map1)["2"].optional_int32(), 2);
+  EXPECT_EQ((*map1)["2"].GetArena(), &arena);
 }
 
 TEST(MapTest, CopyConstructionMaintainsProperLoadFactor) {
@@ -192,7 +187,7 @@ TEST(MapTest, CalculateCapacityForSizeTest) {
 TEST(MapTest, AlwaysSerializesBothEntries) {
   for (const Message* prototype :
        {static_cast<const Message*>(
-            &protobuf_unittest::TestI32StrMap::default_instance()),
+            &proto2_unittest::TestI32StrMap::default_instance()),
         static_cast<const Message*>(
             &proto3_unittest::TestI32StrMap::default_instance())}) {
     const FieldDescriptor* map_field =
@@ -309,42 +304,14 @@ TEST(MapTest, SizeTypeIsSizeT) {
   (void)x;
 }
 
-template <typename F, typename... Key, typename... Value>
-void TestAllKeyValueTypes(void (*)(Key...), void (*)(Value...), F f) {
-  (
-      [f]() {
-        using K = Key;
-        (f(K{}, Value{}), ...);
-      }(),
-      ...);
-}
-
 using KeyTypes = void (*)(bool, int32_t, uint32_t, int64_t, uint64_t,
                           std::string);
 // Some arbitrary proto enum.
-using SomeEnum = protobuf_unittest::TestAllTypes::NestedEnum;
+using SomeEnum = proto2_unittest::TestAllTypes::NestedEnum;
 using ValueTypes = void (*)(bool, int32_t, uint32_t, int64_t, uint64_t, float,
                             double, std::string, SomeEnum,
-                            protobuf_unittest::TestEmptyMessage,
-                            protobuf_unittest::TestAllTypes);
-
-TEST(MapTest, StaticTypeInfoMatchesDynamicOne) {
-  TestAllKeyValueTypes(KeyTypes(), ValueTypes(), [](auto key, auto value) {
-    using Key = decltype(key);
-    using Value = decltype(value);
-    const MessageLite* value_prototype = nullptr;
-    if constexpr (std::is_base_of_v<MessageLite, Value>) {
-      value_prototype = &Value::default_instance();
-    }
-    const auto type_info = MapTestPeer::GetTypeInfo<Map<Key, Value>>();
-    const auto dyn_type_info = internal::UntypedMapBase::GetTypeInfoDynamic(
-        type_info.key_type, type_info.value_type, value_prototype);
-    EXPECT_EQ(dyn_type_info.node_size, type_info.node_size);
-    EXPECT_EQ(dyn_type_info.value_offset, type_info.value_offset);
-    EXPECT_EQ(dyn_type_info.key_type, type_info.key_type);
-    EXPECT_EQ(dyn_type_info.value_type, type_info.value_type);
-  });
-}
+                            proto2_unittest::TestEmptyMessage,
+                            proto2_unittest::TestAllTypes);
 
 TEST(MapTest, StaticTypeKindWorks) {
   using UMB = UntypedMapBase;
@@ -356,7 +323,40 @@ TEST(MapTest, StaticTypeKindWorks) {
   EXPECT_EQ(UMB::TypeKind::kU64, UMB::StaticTypeKind<uint64_t>());
   EXPECT_EQ(UMB::TypeKind::kString, UMB::StaticTypeKind<std::string>());
   EXPECT_EQ(UMB::TypeKind::kMessage,
-            UMB::StaticTypeKind<protobuf_unittest::TestAllTypes>());
+            UMB::StaticTypeKind<proto2_unittest::TestAllTypes>());
+}
+
+#if !defined(__GNUC__) || defined(__clang__) || PROTOBUF_GNUC_MIN(9, 4)
+// Parameter pack expansion bug before GCC 8.2:
+// https://gcc.gnu.org/bugzilla/show_bug.cgi?id=85305
+
+template <typename F, typename... Key, typename... Value>
+void TestAllKeyValueTypes(void (*)(Key...), void (*)(Value...), F f) {
+  (
+      [f]() {
+        using K = Key;
+        (f(K{}, Value{}), ...);
+      }(),
+      ...);
+}
+
+TEST(MapTest, StaticTypeInfoMatchesDynamicOne) {
+  TestAllKeyValueTypes(KeyTypes(), ValueTypes(), [](auto key, auto value) {
+    using Key = decltype(key);
+    using Value = decltype(value);
+    const MessageLite* value_prototype = nullptr;
+    if constexpr (std::is_base_of_v<MessageLite, Value>) {
+      value_prototype = &Value::default_instance();
+    }
+    const auto type_info = MapTestPeer::GetTypeInfo<Map<Key, Value>>();
+    const auto dyn_type_info = internal::UntypedMapBase::GetTypeInfoDynamic(
+        type_info.key_type_kind(), type_info.value_type_kind(),
+        value_prototype);
+    EXPECT_EQ(dyn_type_info.node_size, type_info.node_size);
+    EXPECT_EQ(dyn_type_info.value_offset, type_info.value_offset);
+    EXPECT_EQ(dyn_type_info.key_type, type_info.key_type);
+    EXPECT_EQ(dyn_type_info.value_type, type_info.value_type);
+  });
 }
 
 template <typename LHS, typename RHS>
@@ -427,6 +427,8 @@ TEST(MapTest, VisitAllNodesUsesTheRightTypesOnAllNodes) {
     EXPECT_TRUE(it == map.end());
   });
 }
+
+#endif
 
 TEST(MapTest, IteratorNodeFieldIsNullPtrAtEnd) {
   Map<int, int> map;

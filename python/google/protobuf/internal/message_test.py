@@ -30,16 +30,20 @@ import warnings
 cmp = lambda x, y: (x > y) - (x < y)
 
 from google.protobuf.internal import api_implementation # pylint: disable=g-import-not-at-top
+from google.protobuf.internal import decoder
 from google.protobuf.internal import encoder
 from google.protobuf.internal import enum_type_wrapper
 from google.protobuf.internal import more_extensions_pb2
 from google.protobuf.internal import more_messages_pb2
 from google.protobuf.internal import packed_field_test_pb2
+from google.protobuf.internal import self_recursive_pb2
 from google.protobuf.internal import test_proto3_optional_pb2
 from google.protobuf.internal import test_util
 from google.protobuf.internal import testing_refleaks
+from google.protobuf.internal import wire_format
 from google.protobuf import descriptor
 from google.protobuf import message
+from google.protobuf import unknown_fields
 from absl.testing import parameterized
 from google.protobuf import map_proto2_unittest_pb2
 from google.protobuf import map_unittest_pb2
@@ -496,6 +500,40 @@ class MessageTest(unittest.TestCase):
     message = more_messages_pb2.RequiredField()
     message.MergeFrom(msg)
     self.assertEqual(msg, message)
+
+  def testScalarRepeatedClear(self, message_module):
+    msg = message_module.TestAllTypes()
+    empty_size = msg.ByteSize()
+    msg.repeated_int32.append(1)
+    msg.repeated_int32.append(3)
+    repeated_int = msg.repeated_int32
+    self.assertEqual(2, len(msg.repeated_int32))
+    self.assertGreater(msg.ByteSize(), empty_size)
+    msg.repeated_int32.clear()
+    self.assertEqual(0, len(msg.repeated_int32))
+    self.assertEqual(0, len(repeated_int))
+    self.assertEqual(empty_size, msg.ByteSize())
+
+  def testCompositeRepeatedClear(self, message_module):
+    msg = message_module.TestAllTypes()
+    empty_size = msg.ByteSize()
+    msg.repeated_nested_message.add(bb=123)
+    msg.repeated_nested_message.add(bb=2)
+    repeated_nested_message = msg.repeated_nested_message
+    self.assertEqual(2, len(msg.repeated_nested_message))
+    self.assertGreater(msg.ByteSize(), empty_size)
+    msg.repeated_nested_message.clear()
+    self.assertEqual(0, len(msg.repeated_nested_message))
+    self.assertEqual(0, len(repeated_nested_message))
+    self.assertEqual(empty_size, msg.ByteSize())
+
+  def testCompositeRepeatedClearRelease(self, message_module):
+    msg = message_module.TestAllTypes()
+    msg.repeated_nested_message.add(bb=123)
+    # sub msg reference should still work after clear()
+    sub_msg = msg.repeated_nested_message[0]
+    msg.repeated_nested_message.clear()
+    self.assertEqual(123, sub_msg.bb)
 
   def testAddWrongRepeatedNestedField(self, message_module):
     msg = message_module.TestAllTypes()
@@ -963,6 +1001,50 @@ class MessageTest(unittest.TestCase):
     self.assertEqual('oneof_nested_message',
                      m2.child.payload.WhichOneof('oneof_field'))
 
+  def testOneofReleaseMergeFrom(self, message_module):
+    m = unittest_pb2.TestOneof2()
+    m.foo_message.moo_int = 123
+    reference = m.foo_message
+    self.assertEqual(m.foo_message.moo_int, 123)
+    m2 = unittest_pb2.TestOneof2()
+    m2.foo_lazy_message.moo_int = 456
+    m.MergeFrom(m2)
+    self.assertEqual(reference.moo_int, 123)
+    self.assertEqual(m.foo_message.moo_int, 0)
+    m.foo_message.CopyFrom(reference)
+    self.assertEqual(m.foo_message.moo_int, 123)
+
+  def testNestedOneofRleaseMergeFrom(self, message_module):
+    m = message_module.NestedTestAllTypes()
+    m.payload.oneof_nested_message.bb = 1
+    m.child.payload.oneof_nested_message.bb = 2
+    ref1 = m.payload.oneof_nested_message
+    ref2 = m.child.payload.oneof_nested_message
+    other = message_module.NestedTestAllTypes()
+    other.payload.oneof_uint32 = 22
+    other.child.payload.oneof_string = 'hi'
+    self.assertEqual(ref1.bb, 1)
+    self.assertEqual(ref2.bb, 2)
+    m.MergeFrom(other)
+    # oneof messages are released
+    self.assertEqual(ref1.bb, 1)
+    self.assertEqual(ref2.bb, 2)
+    self.assertEqual(m.payload.oneof_nested_message.bb, 0)
+    self.assertEqual(m.child.payload.oneof_nested_message.bb, 0)
+    self.assertEqual(m.payload.oneof_uint32, 22)
+    self.assertEqual(m.child.payload.oneof_string, 'hi')
+
+  def testOneofNotReleaseMergeFrom(self, message_module):
+    m = message_module.NestedTestAllTypes()
+    m.payload.oneof_nested_message.bb = 1
+    ref = m.payload.oneof_nested_message
+    other = message_module.NestedTestAllTypes()
+    other.payload.oneof_nested_message.bb = 2
+    self.assertEqual(ref.bb, 1)
+    m.MergeFrom(other)
+    # oneof message is not released
+    self.assertEqual(ref.bb, 2)
+
   def testOneofNestedMessageInit(self, message_module):
     m = message_module.TestAllTypes(
         oneof_nested_message=message_module.TestAllTypes.NestedMessage())
@@ -1395,6 +1477,176 @@ class MessageTest(unittest.TestCase):
         'TestAllTypes.NestedMessage', nested.__class__.__qualname__
     )
 
+  def testAssignBoolToEnum(self, message_module):
+    # TODO: change warning into error in 2026 Q1
+    # with self.assertRaises(TypeError):
+    with warnings.catch_warnings(record=True) as w:
+      m = message_module.TestAllTypes(optional_nested_enum=True)
+      self.assertIn('bool', str(w[0].message))
+    self.assertEqual(m.optional_nested_enum, 1)
+
+    m = message_module.TestAllTypes(optional_nested_enum=2)
+    with warnings.catch_warnings(record=True) as w:
+      m.optional_nested_enum = True
+      self.assertIn('bool', str(w[0].message))
+    self.assertEqual(m.optional_nested_enum, 1)
+
+    with warnings.catch_warnings(record=True) as w:
+      m.optional_nested_enum = 2
+      self.assertFalse(w)
+    self.assertEqual(m.optional_nested_enum, 2)
+
+  def testBoolToRepeatedEnum(self, message_module):
+    with warnings.catch_warnings(record=True) as w:
+      m = message_module.TestAllTypes(repeated_nested_enum=[True])
+      self.assertIn('bool', str(w[0].message))
+    self.assertEqual(m.repeated_nested_enum, [1])
+
+    m = message_module.TestAllTypes()
+    with warnings.catch_warnings(record=True) as w:
+      m.repeated_nested_enum.append(True)
+      self.assertIn('bool', str(w[0].message))
+    self.assertEqual(m.repeated_nested_enum, [1])
+
+  def testBoolToOneofEnum(self, message_module):
+    m = unittest_pb2.TestOneof2()
+    with warnings.catch_warnings(record=True) as w:
+      m.foo_enum = True
+      self.assertIn('bool', str(w[0].message))
+    self.assertEqual(m.foo_enum, 1)
+
+  def testBoolToMapEnum(self, message_module):
+    m = map_unittest_pb2.TestMap()
+    with warnings.catch_warnings(record=True) as w:
+      m.map_int32_enum[10] = True
+      self.assertIn('bool', str(w[0].message))
+    self.assertEqual(m.map_int32_enum[10], 1)
+
+  def testBoolToExtensionEnum(self, message_module):
+    m = unittest_pb2.TestAllExtensions()
+    with warnings.catch_warnings(record=True) as w:
+      m.Extensions[unittest_pb2.optional_nested_enum_extension] = True
+      self.assertIn('bool', str(w[0].message))
+    self.assertEqual(
+        m.Extensions[unittest_pb2.optional_nested_enum_extension], 1
+    )
+
+  def testClosedEnumExtension(self, message_module):
+    m = unittest_pb2.TestAllExtensions()
+    m.ParseFromString(b'\xa8\x01\x7f')
+    unknown = unknown_fields.UnknownFieldSet(m)
+
+    # The data is present in unknown fields.
+    self.assertEqual(unknown[0].field_number, 21)
+    self.assertEqual(unknown[0].wire_type, wire_format.WIRETYPE_VARINT)
+    self.assertEqual(unknown[0].data, 0x7f)
+
+    # There is no extension present.
+    self.assertFalse(
+        m.HasExtension(unittest_pb2.optional_nested_enum_extension)
+    )
+
+  def testAssignBoolToInt(self, message_module):
+    with warnings.catch_warnings(record=True) as w:
+      m = message_module.TestAllTypes(optional_int32=True)
+      self.assertIn('bool', str(w[0].message))
+    self.assertEqual(m.optional_int32, 1)
+
+    m = message_module.TestAllTypes(optional_uint32=123)
+    with warnings.catch_warnings(record=True) as w:
+      m.optional_uint32 = True
+      self.assertIn('bool', str(w[0].message))
+    self.assertEqual(m.optional_uint32, 1)
+
+    with warnings.catch_warnings(record=True) as w:
+      m.optional_uint32 = 321
+      self.assertFalse(w)
+    self.assertEqual(m.optional_uint32, 321)
+
+  def testAssignBoolToRepeatedInt(self, message_module):
+    with warnings.catch_warnings(record=True) as w:
+      m = message_module.TestAllTypes(repeated_int64=[True])
+      self.assertIn('bool', str(w[0].message))
+    self.assertEqual(m.repeated_int64, [1])
+
+    m = message_module.TestAllTypes()
+    with warnings.catch_warnings(record=True) as w:
+      m.repeated_int64.append(True)
+      self.assertIn('bool', str(w[0].message))
+    self.assertEqual(m.repeated_int64, [1])
+
+  def testAssignBoolToOneofInt(self, message_module):
+    m = unittest_pb2.TestOneof2()
+    with warnings.catch_warnings(record=True) as w:
+      m.foo_int = True
+      self.assertIn('bool', str(w[0].message))
+    self.assertEqual(m.foo_int, 1)
+
+  def testAssignBoolToMapInt(self, message_module):
+    m = map_unittest_pb2.TestMap()
+    with warnings.catch_warnings(record=True) as w:
+      m.map_int32_int32[10] = True
+      self.assertIn('bool', str(w[0].message))
+    self.assertEqual(m.map_int32_int32[10], 1)
+
+    with warnings.catch_warnings(record=True) as w:
+      m.map_int32_int32[True] = 1
+      self.assertIn('bool', str(w[0].message))
+    self.assertEqual(m.map_int32_int32[1], 1)
+
+  def testAssignBoolToExtensionInt(self, message_module):
+    m = unittest_pb2.TestAllExtensions()
+    with warnings.catch_warnings(record=True) as w:
+      m.Extensions[unittest_pb2.optional_int32_extension] = True
+      self.assertIn('bool', str(w[0].message))
+    self.assertEqual(m.Extensions[unittest_pb2.optional_int32_extension], 1)
+
+
+@testing_refleaks.TestCase
+class TestRecursiveGroup(unittest.TestCase):
+
+  def _MakeRecursiveGroupMessage(self, n):
+    msg = self_recursive_pb2.SelfRecursive()
+    sub = msg
+    for _ in range(n):
+      sub = sub.sub_group
+    sub.i = 1
+    return msg.SerializeToString()
+
+  def testRecursiveGroups(self):
+    recurse_msg = self_recursive_pb2.SelfRecursive()
+    data = self._MakeRecursiveGroupMessage(100)
+    recurse_msg.ParseFromString(data)
+    self.assertTrue(recurse_msg.HasField('sub_group'))
+
+  def testRecursiveGroupsException(self):
+    if api_implementation.Type() != 'python':
+      api_implementation._c_module.SetAllowOversizeProtos(False)
+    recurse_msg = self_recursive_pb2.SelfRecursive()
+    data = self._MakeRecursiveGroupMessage(300)
+    with self.assertRaises(message.DecodeError) as context:
+      recurse_msg.ParseFromString(data)
+    self.assertIn('Error parsing message', str(context.exception))
+    if api_implementation.Type() == 'python':
+      self.assertIn('too many levels of nesting', str(context.exception))
+
+  def testRecursiveGroupsUnknownFields(self):
+    if api_implementation.Type() != 'python':
+      api_implementation._c_module.SetAllowOversizeProtos(False)
+    test_msg = unittest_pb2.TestAllTypes()
+    data = self._MakeRecursiveGroupMessage(300)  # unknown to test_msg
+    with self.assertRaises(message.DecodeError) as context:
+      test_msg.ParseFromString(data)
+    self.assertIn(
+        'Error parsing message',
+        str(context.exception),
+    )
+    if api_implementation.Type() == 'python':
+      self.assertIn('too many levels of nesting', str(context.exception))
+      decoder.SetRecursionLimit(310)
+      test_msg.ParseFromString(data)
+      decoder.SetRecursionLimit(decoder.DEFAULT_RECURSION_LIMIT)
+
 
 # Class to test proto2-only features (required, extensions, etc.)
 @testing_refleaks.TestCase
@@ -1684,6 +1936,14 @@ class Proto2Test(unittest.TestCase):
 
     with self.assertRaises(ValueError):
       unittest_pb2.TestAllTypes(repeated_nested_enum='FOO')
+
+    m1 = unittest_pb2.TestAllTypes(
+        repeated_foreign_message=[{'c': 1}]
+    )
+    with self.assertRaises(TypeError):
+      unittest_pb2.TestAllTypes(
+          repeated_nested_message=m1.repeated_foreign_message
+      )
 
   def testPythonicInitWithDict(self):
     # Both string/unicode field name keys should work.
@@ -2424,11 +2684,11 @@ class Proto3Test(unittest.TestCase):
     int32_foreign_keys = list(msg.map_int32_foreign_message.keys())
 
     keys = []
-    for key in msg.map_string_string:
+    for key in list(msg.map_string_string.keys()):
       keys.append(key)
       msg.map_string_string[key] = '000'
-    self.assertEqual(keys, string_string_keys)
-    self.assertEqual(keys, list(msg.map_string_string.keys()))
+    self.assertCountEqual(keys, string_string_keys)
+    self.assertCountEqual(keys, list(msg.map_string_string.keys()))
 
     keys = []
     for key in msg.map_int32_foreign_message:
@@ -2824,8 +3084,6 @@ class PackedFieldTest(unittest.TestCase):
     self.assertEqual(golden_data, message.SerializeToString())
 
 
-@unittest.skipIf(api_implementation.Type() == 'python',
-                 'explicit tests of the C++ implementation')
 @testing_refleaks.TestCase
 class OversizeProtosTest(unittest.TestCase):
 
@@ -2842,16 +3100,23 @@ class OversizeProtosTest(unittest.TestCase):
     msg.ParseFromString(self.GenerateNestedProto(100))
 
   def testAssertOversizeProto(self):
-    api_implementation._c_module.SetAllowOversizeProtos(False)
+    if api_implementation.Type() != 'python':
+      api_implementation._c_module.SetAllowOversizeProtos(False)
     msg = unittest_pb2.TestRecursiveMessage()
     with self.assertRaises(message.DecodeError) as context:
       msg.ParseFromString(self.GenerateNestedProto(101))
     self.assertIn('Error parsing message', str(context.exception))
 
   def testSucceedOversizeProto(self):
-    api_implementation._c_module.SetAllowOversizeProtos(True)
+
+    if api_implementation.Type() == 'python':
+      decoder.SetRecursionLimit(310)
+    else:
+      api_implementation._c_module.SetAllowOversizeProtos(True)
+
     msg = unittest_pb2.TestRecursiveMessage()
     msg.ParseFromString(self.GenerateNestedProto(101))
+    decoder.SetRecursionLimit(decoder.DEFAULT_RECURSION_LIMIT)
 
 
 if __name__ == '__main__':

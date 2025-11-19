@@ -65,11 +65,9 @@ void SingularString::InMsgImpl(Context& ctx, const FieldDescriptor& field,
                ctx.Emit(R"rs(
                   pub fn $field$($view_self$) -> $pb$::View<$view_lifetime$, $proxied_type$> {
                     let str_view = unsafe {
-                      let f = $pbr$::upb_MiniTable_GetFieldByIndex(
-                          <Self as $pbr$::AssociatedMiniTable>::mini_table(),
-                          $upb_mt_field_index$);
-                      $pbr$::upb_Message_GetString(
-                          self.raw_msg(), f, ($default_value$).into())
+                      self.inner.ptr().get_string_at_index(
+                        $upb_mt_field_index$, ($default_value$).into()
+                      )
                     };
                     $transform_view$
                   })rs");
@@ -83,33 +81,24 @@ void SingularString::InMsgImpl(Context& ctx, const FieldDescriptor& field,
                 let s = val.into_proxied($pbi$::Private);
                 unsafe {
                   $setter_thunk$(
-                    self.as_mutator_message_ref($pbi$::Private).msg(),
+                    self.inner.raw(),
                     s.into_inner($pbi$::Private).into_raw()
                   );
                 }
               )rs");
              } else {
-               ctx.Emit(R"rs(
-                let s = val.into_proxied($pbi$::Private);
-                let (view, arena) =
-                  s.into_inner($pbi$::Private).into_raw_parts();
-
-                let mm_ref =
-                  self.as_mutator_message_ref($pbi$::Private);
-                let parent_arena = mm_ref.arena();
-
-                parent_arena.fuse(&arena);
-
+               ctx.Emit(
+                   {{"string_type", field.type() == FieldDescriptor::TYPE_STRING
+                                        ? "string"
+                                        : "bytes"}},
+                   R"rs(
                 unsafe {
-                  let f = $pbr$::upb_MiniTable_GetFieldByIndex(
-                            <Self as $pbr$::AssociatedMiniTable>::mini_table(),
-                            $upb_mt_field_index$);
-                  $pbr$::upb_Message_SetBaseFieldString(
-                    self.as_mutator_message_ref($pbi$::Private).msg(),
-                    f,
-                    view);
+                  $pbr$::message_set_$string_type$_field(
+                    $pb$::AsMut::as_mut(self).inner,
+                    $upb_mt_field_index$,
+                    val);
                 }
-              )rs");
+               )rs");
              }
            }},
           {"setter",

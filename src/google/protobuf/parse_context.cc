@@ -8,12 +8,25 @@
 #include "google/protobuf/parse_context.h"
 
 #include <algorithm>
+#include <climits>
+#include <cstddef>
+#include <cstdint>
 #include <cstring>
+#include <memory>
+#include <string>
+#include <utility>
 
 #include "absl/base/optimization.h"
+#include "absl/base/prefetch.h"
+#include "absl/log/absl_check.h"
 #include "absl/strings/cord.h"
+#include "absl/strings/str_cat.h"
 #include "absl/strings/string_view.h"
+#include "absl/types/span.h"
+#include "google/protobuf/internal_visibility.h"
 #include "google/protobuf/message_lite.h"
+#include "google/protobuf/micro_string.h"
+#include "google/protobuf/port.h"
 #include "google/protobuf/repeated_field.h"
 #include "google/protobuf/wire_format_lite.h"
 #include "utf8_validity.h"
@@ -26,14 +39,8 @@ namespace google {
 namespace protobuf {
 namespace internal {
 
-// Only call if at start of tag.
-bool EpsCopyInputStream::ParseEndsInSlopRegion(const char* begin, int overrun,
-                                               int depth) {
-  constexpr int kSlopBytes = EpsCopyInputStream::kSlopBytes;
-  ABSL_DCHECK_GE(overrun, 0);
-  ABSL_DCHECK_LE(overrun, kSlopBytes);
-  auto ptr = begin + overrun;
-  auto end = begin + kSlopBytes;
+namespace {
+bool ParsingEndsInBuffer(const char* ptr, const char* end, int depth) {
   while (ptr < end) {
     uint32_t tag;
     ptr = ReadTag(ptr, &tag);
@@ -62,7 +69,7 @@ bool EpsCopyInputStream::ParseEndsInSlopRegion(const char* begin, int overrun,
         depth++;
         break;
       }
-      case 4: {                    // end group
+      case 4: {                        // end group
         if (--depth < 0) return true;  // We exit early
         break;
       }
@@ -76,7 +83,35 @@ bool EpsCopyInputStream::ParseEndsInSlopRegion(const char* begin, int overrun,
   }
   return false;
 }
+}  // namespace
 
+bool EpsCopyInputStream::IsRequestedLessThanOrEqualTo(int requested,
+                                                      int available) {
+  return static_cast<int64_t>(static_cast<uint32_t>(requested)) <=
+         static_cast<int64_t>(available);
+}
+
+bool EpsCopyInputStream::CanReadFromPtr(int requested, const char* ptr) {
+  return IsRequestedLessThanOrEqualTo(requested, BytesAvailable(ptr));
+}
+
+bool EpsCopyInputStream::HasEnoughTillLimit(int requested, const char* ptr) {
+  return IsRequestedLessThanOrEqualTo(requested, BytesUntilLimit(ptr));
+}
+
+// Only call if at start of tag.
+template <bool kExperimentalV2>
+bool EpsCopyInputStream::ParseEndsInSlopRegion(const char* begin, int overrun,
+                                               int depth) {
+  constexpr int kSlopBytes = EpsCopyInputStream::kSlopBytes;
+  ABSL_DCHECK_GE(overrun, 0);
+  ABSL_DCHECK_LE(overrun, kSlopBytes);
+  auto ptr = begin + overrun;
+  auto end = begin + kSlopBytes;
+  return ParsingEndsInBuffer(ptr, end, depth);
+}
+
+template <bool kExperimentalV2>
 const char* EpsCopyInputStream::NextBuffer(int overrun, int depth) {
   if (next_chunk_ == nullptr) return nullptr;  // We've reached end of stream.
   if (next_chunk_ != patch_buffer_) {
@@ -93,7 +128,8 @@ const char* EpsCopyInputStream::NextBuffer(int overrun, int depth) {
   // patch_buffer_.
   std::memmove(patch_buffer_, buffer_end_, kSlopBytes);
   if (overall_limit_ > 0 &&
-      (depth < 0 || !ParseEndsInSlopRegion(patch_buffer_, overrun, depth))) {
+      (depth < 0 || !ParseEndsInSlopRegion<kExperimentalV2>(patch_buffer_,
+                                                            overrun, depth))) {
     const void* data;
     // ZeroCopyInputStream indicates Next may return 0 size buffers. Hence
     // we loop.
@@ -134,7 +170,7 @@ const char* EpsCopyInputStream::NextBuffer(int overrun, int depth) {
 
 const char* EpsCopyInputStream::Next() {
   ABSL_DCHECK(limit_ > kSlopBytes);
-  auto p = NextBuffer(0 /* immaterial */, -1);
+  auto p = NextBuffer</*kExperimentalV2=*/false>(0 /* immaterial */, -1);
   if (p == nullptr) {
     limit_end_ = buffer_end_;
     // Distinguish ending on a pushed limit or ending on end-of-stream.
@@ -146,6 +182,7 @@ const char* EpsCopyInputStream::Next() {
   return p;
 }
 
+template <bool kExperimentalV2>
 std::pair<const char*, bool> EpsCopyInputStream::DoneFallback(int overrun,
                                                               int depth) {
   // Did we exceeded the limit (parse error).
@@ -164,7 +201,7 @@ std::pair<const char*, bool> EpsCopyInputStream::DoneFallback(int overrun,
   do {
     // We are past the end of buffer_end_, in the slop region.
     ABSL_DCHECK_GE(overrun, 0);
-    p = NextBuffer(overrun, depth);
+    p = NextBuffer<kExperimentalV2>(overrun, depth);
     if (p == nullptr) {
       // We are at the end of the stream
       if (ABSL_PREDICT_FALSE(overrun != 0)) return {nullptr, true};
@@ -189,7 +226,7 @@ const char* EpsCopyInputStream::SkipFallback(const char* ptr, int size) {
 const char* EpsCopyInputStream::ReadStringFallback(const char* ptr, int size,
                                                    std::string* str) {
   str->clear();
-  if (ABSL_PREDICT_TRUE(size <= buffer_end_ - ptr + limit_)) {
+  if (ABSL_PREDICT_TRUE(HasEnoughTillLimit(size, ptr))) {
     // Reserve the string up to a static safe size. If strings are bigger than
     // this we proceed by growing the string as needed. This protects against
     // malicious payloads making protobuf hold on to a lot of memory.
@@ -199,9 +236,145 @@ const char* EpsCopyInputStream::ReadStringFallback(const char* ptr, int size,
                     [str](const char* p, int s) { str->append(p, s); });
 }
 
+const char* EpsCopyInputStream::ReadArray(const char* ptr,
+                                          absl::Span<char> out) {
+  if (CanReadFromPtr(out.size(), ptr)) {
+    memcpy(out.data(), ptr, out.size());
+    return ptr + out.size();
+  }
+  return ReadArrayFallback(ptr, out);
+}
+
+const char* EpsCopyInputStream::ReadArrayFallback(const char* ptr,
+                                                  absl::Span<char> out) {
+  char* dst = out.data();
+  return AppendSize(ptr, out.size(), [&dst](const char* p, int s) {
+    memcpy(dst, p, s);
+    dst += s;
+  });
+}
+
+namespace {
+
+// A valid UTF8 ranges in [1, 4]: https://en.wikipedia.org/wiki/UTF-8
+constexpr size_t kUtfMax = 4;
+
+void UnrolledMemcpy(char* dst, const char* src, size_t size) {
+  PROTOBUF_ASSUME(size < 4);
+  for (size_t i = 0; i < size; ++i) {
+    dst[i] = src[i];
+  }
+}
+
+struct LeftoverBuffer {
+  absl::string_view view() const { return {buffer, size}; }
+  bool empty() const { return size == 0; }
+
+  void assign(absl::string_view from);
+  void append(absl::string_view from);
+  // Removes [0, pos) and moves data to the front if any.
+  void remove_prefix(uint32_t pos);
+
+  uint32_t size = 0;
+  char buffer[kUtfMax];
+};
+
+void LeftoverBuffer::assign(absl::string_view from) {
+  ABSL_DCHECK_LT(from.size(), kUtfMax);
+
+  UnrolledMemcpy(buffer, from.data(), from.size());
+  size = from.size();
+}
+
+void LeftoverBuffer::append(absl::string_view from) {
+  ABSL_DCHECK_LE(size + from.size(), kUtfMax);
+
+  UnrolledMemcpy(buffer + size, from.data(), from.size());
+  size += from.size();
+}
+
+void LeftoverBuffer::remove_prefix(uint32_t pos) {
+  ABSL_DCHECK_LE(pos, size);
+
+  size -= pos;
+  UnrolledMemcpy(buffer, buffer + pos, size);
+}
+
+// Returns true if "fragment" potentially prefixed with "leftover" is valid
+// UTF8. Copied from `CordIsValid()`:
+// http://google3/util/utf8/internal/unilib.cc;l=85;rcl=740640507
+bool IsViewValidUTF8WithLeftover(absl::string_view fragment,
+                                 LeftoverBuffer& leftover) {
+  if (size_t leftover_size = leftover.size; leftover_size > 0) {
+    ABSL_DCHECK_LT(leftover_size, kUtfMax);
+
+    // Copy into the leftover buffer until it has kUtfMax bytes, and match code
+    // points within that buffer, removing them from the prefix of the next
+    // chunk.
+    const size_t fill_size = kUtfMax - leftover_size;
+    if (fragment.size() < fill_size) {
+      // If the full fragment fits in the buffer, match and consume if possible.
+      leftover.append(fragment);
+      // Opportunistically validate but it's okay otherwise as we may be
+      // building up to a valid UTF8.
+      leftover.remove_prefix(
+          utf8_range::SpanStructurallyValid(leftover.view()));
+      return true;
+    }
+
+    // Otherwise, fill the buffer from the prefix of the fragment, match, and
+    // remove the bytes in the *match* (not the unmatched part of the buffer)
+    // that originally came from the current fragment.
+    //
+    // Note that fragment is big enough to fill leftover to the max UTF8 value.
+    // It has to have a valid UTF8.
+    leftover.append(fragment.substr(0, fill_size));
+    const size_t leftover_valid =
+        utf8_range::SpanStructurallyValid(leftover.view());
+    if (leftover_valid == 0) {
+      return false;
+    }
+    fragment.remove_prefix(leftover_valid - leftover_size);
+  }
+
+  const size_t valid = utf8_range::SpanStructurallyValid(fragment);
+  fragment.remove_prefix(valid);
+  // If the last Unicode char crosses to next fragment, length must be smaller
+  // than kUtfMax.
+  if (kUtfMax <= fragment.size()) {
+    return false;
+  }
+
+  leftover.assign(fragment);
+
+  // So far so good. Continue to the next fragment.
+  return true;
+}
+
+}  // namespace
+
+const char* EpsCopyInputStream::VerifyUTF8(const char* ptr, size_t size) {
+  if (size <= static_cast<size_t>(BytesAvailable(ptr))) {
+    return utf8_range::IsStructurallyValid({ptr, size}) ? ptr + size : nullptr;
+  }
+  return VerifyUTF8Fallback(ptr, size);
+}
+
+const char* EpsCopyInputStream::VerifyUTF8Fallback(const char* ptr,
+                                                   size_t size) {
+  // Copied the implementation of CordIsValid().
+  LeftoverBuffer leftover;
+
+  ptr = AppendSize(ptr, size, [&leftover](const char* p, int s) -> bool {
+    return IsViewValidUTF8WithLeftover({p, static_cast<size_t>(s)}, leftover);
+  });
+  return leftover.empty() ? ptr : nullptr;
+}
+
 const char* EpsCopyInputStream::AppendStringFallback(const char* ptr, int size,
                                                      std::string* str) {
-  if (ABSL_PREDICT_TRUE(size <= buffer_end_ - ptr + limit_)) {
+  if (ABSL_PREDICT_TRUE(
+          IsRequestedLessThanOrEqualTo(size, BytesUntilLimit(ptr)))) {
     // Reserve the string up to a static safe size. If strings are bigger than
     // this we proceed by growing the string as needed. This protects against
     // malicious payloads making protobuf hold on to a lot of memory.
@@ -214,8 +387,7 @@ const char* EpsCopyInputStream::AppendStringFallback(const char* ptr, int size,
 const char* EpsCopyInputStream::ReadCordFallback(const char* ptr, int size,
                                                  absl::Cord* cord) {
   if (zcis_ == nullptr) {
-    int bytes_from_buffer = buffer_end_ - ptr + kSlopBytes;
-    if (size <= bytes_from_buffer) {
+    if (CanReadFromPtr(size, ptr)) {
       *cord = absl::string_view(ptr, size);
       return ptr + size;
     }
@@ -224,9 +396,9 @@ const char* EpsCopyInputStream::ReadCordFallback(const char* ptr, int size,
     });
   }
   int new_limit = buffer_end_ - ptr + limit_;
-  if (size > new_limit) return nullptr;
+  if (!IsRequestedLessThanOrEqualTo(size, new_limit)) return nullptr;
   new_limit -= size;
-  int bytes_from_buffer = buffer_end_ - ptr + kSlopBytes;
+  int bytes_from_buffer = BytesAvailable(ptr);
   const bool in_patch_buf = reinterpret_cast<uintptr_t>(ptr) -
                                 reinterpret_cast<uintptr_t>(patch_buffer_) <=
                             kPatchBufferSize;
@@ -424,9 +596,11 @@ const char* InlineGreedyStringParser(std::string* s, const char* ptr,
 }
 
 
+
 template <typename T, bool sign>
-const char* VarintParser(void* object, const char* ptr, ParseContext* ctx) {
-  return ctx->ReadPackedVarint(ptr, [object](uint64_t varint) {
+const char* VarintParser(void* object, Arena* arena, const char* ptr,
+                         ParseContext* ctx) {
+  return ctx->ReadPackedVarint(ptr, [object, arena](uint64_t varint) {
     T val;
     if (sign) {
       if (sizeof(T) == 8) {
@@ -437,73 +611,77 @@ const char* VarintParser(void* object, const char* ptr, ParseContext* ctx) {
     } else {
       val = varint;
     }
-    static_cast<RepeatedField<T>*>(object)->Add(val);
+    static_cast<RepeatedField<T>*>(object)->InternalAddWithArena(
+        InternalVisibility(), arena, val);
   });
 }
 
-const char* PackedInt32Parser(void* object, const char* ptr,
+const char* PackedInt32Parser(void* object, Arena* arena, const char* ptr,
                               ParseContext* ctx) {
-  return VarintParser<int32_t, false>(object, ptr, ctx);
+  return VarintParser<int32_t, false>(object, arena, ptr, ctx);
 }
-const char* PackedUInt32Parser(void* object, const char* ptr,
+const char* PackedUInt32Parser(void* object, Arena* arena, const char* ptr,
                                ParseContext* ctx) {
-  return VarintParser<uint32_t, false>(object, ptr, ctx);
+  return VarintParser<uint32_t, false>(object, arena, ptr, ctx);
 }
-const char* PackedInt64Parser(void* object, const char* ptr,
+const char* PackedInt64Parser(void* object, Arena* arena, const char* ptr,
                               ParseContext* ctx) {
-  return VarintParser<int64_t, false>(object, ptr, ctx);
+  return VarintParser<int64_t, false>(object, arena, ptr, ctx);
 }
-const char* PackedUInt64Parser(void* object, const char* ptr,
+const char* PackedUInt64Parser(void* object, Arena* arena, const char* ptr,
                                ParseContext* ctx) {
-  return VarintParser<uint64_t, false>(object, ptr, ctx);
+  return VarintParser<uint64_t, false>(object, arena, ptr, ctx);
 }
-const char* PackedSInt32Parser(void* object, const char* ptr,
+const char* PackedSInt32Parser(void* object, Arena* arena, const char* ptr,
                                ParseContext* ctx) {
-  return VarintParser<int32_t, true>(object, ptr, ctx);
+  return VarintParser<int32_t, true>(object, arena, ptr, ctx);
 }
-const char* PackedSInt64Parser(void* object, const char* ptr,
+const char* PackedSInt64Parser(void* object, Arena* arena, const char* ptr,
                                ParseContext* ctx) {
-  return VarintParser<int64_t, true>(object, ptr, ctx);
+  return VarintParser<int64_t, true>(object, arena, ptr, ctx);
 }
 
-const char* PackedEnumParser(void* object, const char* ptr, ParseContext* ctx) {
-  return VarintParser<int, false>(object, ptr, ctx);
+const char* PackedEnumParser(void* object, Arena* arena, const char* ptr,
+                             ParseContext* ctx) {
+  return VarintParser<int, false>(object, arena, ptr, ctx);
 }
 
-const char* PackedBoolParser(void* object, const char* ptr, ParseContext* ctx) {
-  return VarintParser<bool, false>(object, ptr, ctx);
+const char* PackedBoolParser(void* object, Arena* arena, const char* ptr,
+                             ParseContext* ctx) {
+  return VarintParser<bool, false>(object, arena, ptr, ctx);
 }
 
 template <typename T>
-const char* FixedParser(void* object, const char* ptr, ParseContext* ctx) {
+const char* FixedParser(void* object, Arena* arena, const char* ptr,
+                        ParseContext* ctx) {
   int size = ReadSize(&ptr);
-  return ctx->ReadPackedFixed(ptr, size,
+  return ctx->ReadPackedFixed(ptr, arena, size,
                               static_cast<RepeatedField<T>*>(object));
 }
 
-const char* PackedFixed32Parser(void* object, const char* ptr,
+const char* PackedFixed32Parser(void* object, Arena* arena, const char* ptr,
                                 ParseContext* ctx) {
-  return FixedParser<uint32_t>(object, ptr, ctx);
+  return FixedParser<uint32_t>(object, arena, ptr, ctx);
 }
-const char* PackedSFixed32Parser(void* object, const char* ptr,
+const char* PackedSFixed32Parser(void* object, Arena* arena, const char* ptr,
                                  ParseContext* ctx) {
-  return FixedParser<int32_t>(object, ptr, ctx);
+  return FixedParser<int32_t>(object, arena, ptr, ctx);
 }
-const char* PackedFixed64Parser(void* object, const char* ptr,
+const char* PackedFixed64Parser(void* object, Arena* arena, const char* ptr,
                                 ParseContext* ctx) {
-  return FixedParser<uint64_t>(object, ptr, ctx);
+  return FixedParser<uint64_t>(object, arena, ptr, ctx);
 }
-const char* PackedSFixed64Parser(void* object, const char* ptr,
+const char* PackedSFixed64Parser(void* object, Arena* arena, const char* ptr,
                                  ParseContext* ctx) {
-  return FixedParser<int64_t>(object, ptr, ctx);
+  return FixedParser<int64_t>(object, arena, ptr, ctx);
 }
-const char* PackedFloatParser(void* object, const char* ptr,
+const char* PackedFloatParser(void* object, Arena* arena, const char* ptr,
                               ParseContext* ctx) {
-  return FixedParser<float>(object, ptr, ctx);
+  return FixedParser<float>(object, arena, ptr, ctx);
 }
-const char* PackedDoubleParser(void* object, const char* ptr,
+const char* PackedDoubleParser(void* object, Arena* arena, const char* ptr,
                                ParseContext* ctx) {
-  return FixedParser<double>(object, ptr, ctx);
+  return FixedParser<double>(object, arena, ptr, ctx);
 }
 
 class UnknownFieldLiteParserHelper {
@@ -566,6 +744,26 @@ const char* UnknownFieldParse(uint32_t tag, std::string* unknown,
   UnknownFieldLiteParserHelper field_parser(unknown);
   return FieldParser(tag, field_parser, ptr, ctx);
 }
+
+const char* EpsCopyInputStream::ReadMicroStringFallback(const char* ptr,
+                                                        int size,
+                                                        MicroString& str,
+                                                        Arena* arena) {
+  str.SetInChunks(size, arena, [&](auto append) {
+    ptr = AppendSize(ptr, size, [&](const char* p, int s) {
+      append(absl::string_view(p, s));
+    });
+  });
+  return ptr;
+}
+
+template const char* EpsCopyInputStream::NextBuffer<false>(int, int);
+template const char* EpsCopyInputStream::NextBuffer<true>(int, int);
+
+template std::pair<const char*, bool> EpsCopyInputStream::DoneFallback<false>(
+    int, int);
+template std::pair<const char*, bool> EpsCopyInputStream::DoneFallback<true>(
+    int, int);
 
 }  // namespace internal
 }  // namespace protobuf

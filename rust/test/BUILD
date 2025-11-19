@@ -4,6 +4,7 @@
 # license that can be found in the LICENSE file or at
 # https://developers.google.com/open-source/licenses/bsd
 
+load("@rules_pkg//pkg:mappings.bzl", "pkg_files", "strip_prefix")
 load("//bazel:proto_library.bzl", "proto_library")
 load(
     "//rust:defs.bzl",
@@ -12,7 +13,24 @@ load(
 )
 
 package(
-    default_visibility = ["//rust/test:__subpackages__"],
+    default_visibility = ["//rust:__subpackages__"],
+)
+
+pkg_files(
+    name = "test_proto_srcs",
+    srcs = glob(["*.proto"]),
+    prefix = "proto",
+    strip_prefix = strip_prefix.from_root(""),
+)
+
+pkg_files(
+    name = "google_protobuf_proto_srcs",
+    srcs = [
+        "//src/google/protobuf:cpp_features_proto_srcs",
+        "//src/google/protobuf:descriptor_proto_srcs",
+    ],
+    prefix = "proto",
+    strip_prefix = strip_prefix.from_root("src"),
 )
 
 proto_library(
@@ -439,4 +457,14 @@ rust_upb_proto_library(
     name = "srcsless_library_test_parent_upb_rust_proto",
     testonly = True,
     deps = [":srcsless_library_test_parent_proto"],
+)
+
+# Eventually we should have a Rust target for descriptor.proto directly
+# alongside that file. This is currently difficult to do, because many of our
+# CI jobs are not prepared to handle a Rust dependency in
+# //src/google/protobuf.
+rust_upb_proto_library(
+    name = "descriptor_upb_rust_proto",
+    testonly = True,
+    deps = ["//src/google/protobuf:descriptor_proto"],
 )

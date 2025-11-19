@@ -9,9 +9,12 @@
 
 #include <string.h>
 
+#include <cstdint>
 #include <string>
+#include <variant>
 
 #include <gtest/gtest.h>
+#include "upb/base/string_view.h"
 #include "upb/mem/arena.hpp"
 
 namespace {
@@ -20,8 +23,7 @@ TEST(EpsCopyInputStreamTest, ZeroSize) {
   upb_EpsCopyInputStream stream;
   const char* ptr = nullptr;
   upb_EpsCopyInputStream_Init(&stream, &ptr, 0, false);
-  EXPECT_TRUE(
-      upb_EpsCopyInputStream_IsDoneWithCallback(&stream, &ptr, nullptr));
+  EXPECT_TRUE(upb_EpsCopyInputStream_IsDone(&stream, &ptr));
 }
 
 }  // namespace

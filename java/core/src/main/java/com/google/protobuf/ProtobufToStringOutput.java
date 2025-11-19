@@ -11,15 +11,15 @@ import java.util.Optional;
 public final class ProtobufToStringOutput {
   private enum OutputMode {
     DEBUG_FORMAT,
-    TEXT_FORMAT
+    TEXT_FORMAT,
+    DEFAULT_FORMAT
   }
 
   private static final ThreadLocal<OutputMode> outputMode =
-      ThreadLocal.withInitial(() -> OutputMode.TEXT_FORMAT);
+      ThreadLocal.withInitial(() -> OutputMode.DEFAULT_FORMAT);
 
   private ProtobufToStringOutput() {}
 
-  @CanIgnoreReturnValue
   private static OutputMode setOutputMode(OutputMode newMode) {
     OutputMode oldMode = outputMode.get();
     outputMode.set(newMode);
@@ -45,5 +45,9 @@ public final class ProtobufToStringOutput {
 
   public static boolean shouldOutputDebugFormat() {
     return outputMode.get() == OutputMode.DEBUG_FORMAT;
+  }
+
+  public static boolean isDefaultFormat() {
+    return outputMode.get() == OutputMode.DEFAULT_FORMAT;
   }
 }
