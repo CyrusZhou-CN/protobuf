@@ -32,7 +32,11 @@
 #include "absl/container/flat_hash_set.h"
 #include "absl/log/absl_check.h"
 #include "absl/log/absl_log.h"
+#include "absl/strings/ascii.h"
+#include "absl/strings/numbers.h"
+#include "absl/strings/str_cat.h"
 #include "absl/strings/str_format.h"
+#include "absl/strings/str_join.h"
 #include "absl/strings/string_view.h"
 #include "absl/synchronization/mutex.h"
 #include "absl/types/span.h"
@@ -189,6 +193,47 @@ bool IsMatchingCType(const FieldDescriptor* field, int ctype) {
       return ctype == FieldOptions::STRING;
   }
   internal::Unreachable();
+}
+
+bool AbslParseFlagImpl(absl::string_view text, int& e,
+                       const EnumDescriptor& desc, std::string& error) {
+  if (const auto* value = desc.FindValueByName(text)) {
+    e = value->number();
+    return true;
+  }
+
+  // Try as lower case
+  if (absl::AsciiStrToLower(text) == text) {
+    if (const auto* value = desc.FindValueByName(absl::AsciiStrToUpper(text))) {
+      e = value->number();
+      return true;
+    }
+  }
+
+  // Try as a number
+  int as_number;
+  if (absl::SimpleAtoi(text, &as_number) &&
+      desc.FindValueByNumber(as_number) != nullptr) {
+    e = as_number;
+    return true;
+  }
+
+  std::vector<absl::string_view> supported_values;
+  supported_values.reserve(desc.value_count());
+  for (int i = 0; i < desc.value_count(); i++) {
+    supported_values.push_back(desc.value(i)->name());
+  }
+  error = absl::StrFormat(
+      "Invalid value '%s' for enum '%s'. Supported values are: %s.", text,
+      desc.full_name(), absl::StrJoin(supported_values, ", "));
+  return false;
+}
+
+std::string AbslUnparseFlagImpl(int e, const EnumDescriptor& desc) {
+  if (const auto* value = desc.FindValueByNumber(e)) {
+    return std::string(value->name());
+  }
+  return absl::StrCat(e);
 }
 
 }  // namespace internal
@@ -495,9 +540,8 @@ size_t Reflection::SpaceUsedLong(const Message& message) const {
             case FieldDescriptor::CppStringType::kView:
             case FieldDescriptor::CppStringType::kString:
               if (IsInlined(field)) {
-                const std::string* ptr =
-                    &GetField<InlinedStringField>(message, field).GetNoArena();
-                total_size += StringSpaceUsedExcludingSelfLong(*ptr);
+                total_size += GetField<InlinedStringField>(message, field)
+                                  .SpaceUsedExcludingSelfLong();
               } else if (IsMicroString(field)) {
                 total_size += GetField<MicroString>(message, field)
                                   .SpaceUsedExcludingSelfLong();
@@ -697,27 +741,13 @@ void SwapFieldHelper::SwapInlinedStrings(const Reflection* r, Message* lhs,
   Arena* rhs_arena = rhs->GetArena();
   auto* lhs_string = r->MutableRaw<InlinedStringField>(lhs, field);
   auto* rhs_string = r->MutableRaw<InlinedStringField>(rhs, field);
-  uint32_t index = r->schema_.InlinedStringIndex(field);
-  ABSL_DCHECK_GT(index, 0u);
-  uint32_t* lhs_array = r->MutableInlinedStringDonatedArray(lhs);
-  uint32_t* rhs_array = r->MutableInlinedStringDonatedArray(rhs);
-  uint32_t* lhs_state = &lhs_array[index / 32];
-  uint32_t* rhs_state = &rhs_array[index / 32];
-  bool lhs_arena_dtor_registered = (lhs_array[0] & 0x1u) == 0;
-  bool rhs_arena_dtor_registered = (rhs_array[0] & 0x1u) == 0;
-  const uint32_t mask = ~(static_cast<uint32_t>(1) << (index % 32));
   if (unsafe_shallow_swap) {
     ABSL_DCHECK_EQ(lhs_arena, rhs_arena);
-    InlinedStringField::InternalSwap(lhs_string, lhs_arena_dtor_registered, lhs,
-                                     rhs_string, rhs_arena_dtor_registered, rhs,
-                                     lhs_arena);
+    InlinedStringField::InternalSwap(lhs_string, rhs_string, lhs_arena);
   } else {
     const std::string temp = lhs_string->Get();
-    lhs_string->Set(rhs_string->Get(), lhs_arena,
-                    r->IsInlinedStringDonated(*lhs, field), lhs_state, mask,
-                    lhs);
-    rhs_string->Set(temp, rhs_arena, r->IsInlinedStringDonated(*rhs, field),
-                    rhs_state, mask, rhs);
+    lhs_string->Set(rhs_string->Get(), lhs_arena);
+    rhs_string->Set(temp, rhs_arena);
   }
 }
 
@@ -1226,13 +1256,6 @@ void Reflection::SwapFieldsImpl(
     // be done after SwapField, because SwapField may depend on the
     // information in has bits.
     NaiveSwapHasBit(message1, message2, field);
-    if (field->cpp_type() == FieldDescriptor::CPPTYPE_STRING &&
-        field->cpp_string_type() == FieldDescriptor::CppStringType::kString &&
-        IsInlined(field)) {
-      ABSL_DCHECK(!unsafe_shallow_swap ||
-                  message1->GetArena() == message2->GetArena());
-      SwapInlinedStringDonated(message1, message2, field);
-    }
   }
 }
 
@@ -1331,33 +1354,6 @@ void Reflection::InternalSwap(Message* lhs, Message* rhs) const {
 
     for (int i = 0; i < has_bits_size; i++) {
       std::swap(lhs_has_bits[i], rhs_has_bits[i]);
-    }
-  }
-
-  if (schema_.HasInlinedString()) {
-    uint32_t* lhs_donated_array = MutableInlinedStringDonatedArray(lhs);
-    uint32_t* rhs_donated_array = MutableInlinedStringDonatedArray(rhs);
-    int inlined_string_count = 0;
-    for (int i = 0; i < descriptor_->field_count(); i++) {
-      const FieldDescriptor* field = descriptor_->field(i);
-      if (field->cpp_type() != FieldDescriptor::CPPTYPE_STRING) continue;
-      if (field->is_extension() || field->is_repeated() ||
-          schema_.InRealOneof(field) ||
-          field->cpp_string_type() != FieldDescriptor::CppStringType::kString ||
-          !IsInlined(field)) {
-        continue;
-      }
-      inlined_string_count++;
-    }
-
-    int donated_array_size = inlined_string_count == 0
-                                 ? 0
-                                 // One extra bit for the arena dtor tracking.
-                                 : (inlined_string_count + 1 + 31) / 32;
-    ABSL_CHECK_EQ((lhs_donated_array[0] & 0x1u) == 0,
-                  (rhs_donated_array[0] & 0x1u) == 0);
-    for (int i = 0; i < donated_array_size; i++) {
-      std::swap(lhs_donated_array[i], rhs_donated_array[i]);
     }
   }
 
@@ -2147,14 +2143,7 @@ void Reflection::SetString(Message* message, const FieldDescriptor* field,
       case FieldDescriptor::CppStringType::kView:
       case FieldDescriptor::CppStringType::kString: {
         if (IsInlined(field)) {
-          const uint32_t index = schema_.InlinedStringIndex(field);
-          ABSL_DCHECK_GT(index, 0u);
-          uint32_t* states =
-              &MutableInlinedStringDonatedArray(message)[index / 32];
-          uint32_t mask = ~(static_cast<uint32_t>(1) << (index % 32));
-          MutableField<InlinedStringField>(message, field)
-              ->Set(value, arena, IsInlinedStringDonated(*message, field),
-                    states, mask, message);
+          MutableField<InlinedStringField>(message, field)->Set(value, arena);
           break;
         } else if (IsMicroString(field)) {
           if (schema_.InRealOneof(field) && !HasOneofField(*message, field)) {
@@ -2208,14 +2197,7 @@ void Reflection::SetString(Message* message, const FieldDescriptor* field,
       case FieldDescriptor::CppStringType::kString: {
         if (IsInlined(field)) {
           auto* str = MutableField<InlinedStringField>(message, field);
-          const uint32_t index = schema_.InlinedStringIndex(field);
-          ABSL_DCHECK_GT(index, 0u);
-          uint32_t* states =
-              &MutableInlinedStringDonatedArray(message)[index / 32];
-          uint32_t mask = ~(static_cast<uint32_t>(1) << (index % 32));
-          str->Set(std::string(value), arena,
-                   IsInlinedStringDonated(*message, field), states, mask,
-                   message);
+          str->Set(std::string(value), arena);
         } else if (IsMicroString(field)) {
           if (schema_.InRealOneof(field) && !HasOneofField(*message, field)) {
             ClearOneof(message, field->containing_oneof());
@@ -2529,12 +2511,12 @@ const Message* Reflection::GetDefaultMessageInstance(
   // instances to allow for this. But only do this for real fields.
   // This is an optimization to avoid going to GetPrototype() below, as that
   // requires a lock and a map lookup.
-  if (!field->is_extension() && !field->options().weak() &&
-      !IsLazyField(field) && !schema_.InRealOneof(field)) {
+  if (!field->is_extension() && !field->is_repeated() &&
+      !field->options().weak() && !IsLazyField(field) &&
+      !schema_.InRealOneof(field)) {
     auto* res = DefaultRaw<const Message*>(field);
-    if (res != nullptr) {
-      return res;
-    }
+    ABSL_DCHECK_NE(res, nullptr);
+    return res;
   }
   // Otherwise, just go to the factory.
   return message_factory_->GetPrototype(field->message_type());
@@ -3142,66 +3124,6 @@ ExtensionSet* Reflection::MutableExtensionSet(Message* message) const {
                                           schema_.GetExtensionSetOffset());
 }
 
-const uint32_t* Reflection::GetInlinedStringDonatedArray(
-    const Message& message) const {
-  ABSL_DCHECK(schema_.HasInlinedString());
-  return &GetConstRefAtOffset<uint32_t>(message,
-                                        schema_.InlinedStringDonatedOffset());
-}
-
-uint32_t* Reflection::MutableInlinedStringDonatedArray(Message* message) const {
-  ABSL_DCHECK(schema_.HasInlinedString());
-  return GetPointerAtOffset<uint32_t>(message,
-                                      schema_.InlinedStringDonatedOffset());
-}
-
-// Simple accessors for manipulating _inlined_string_donated_;
-bool Reflection::IsInlinedStringDonated(const Message& message,
-                                        const FieldDescriptor* field) const {
-  uint32_t index = schema_.InlinedStringIndex(field);
-  ABSL_DCHECK_GT(index, 0u);
-  return IsIndexInHasBitSet(GetInlinedStringDonatedArray(message), index);
-}
-
-inline void SetInlinedStringDonated(uint32_t index, uint32_t* array) {
-  array[index / 32] |= (static_cast<uint32_t>(1) << (index % 32));
-}
-
-inline void ClearInlinedStringDonated(uint32_t index, uint32_t* array) {
-  array[index / 32] &= ~(static_cast<uint32_t>(1) << (index % 32));
-}
-
-void Reflection::SwapInlinedStringDonated(Message* lhs, Message* rhs,
-                                          const FieldDescriptor* field) const {
-  Arena* lhs_arena = lhs->GetArena();
-  Arena* rhs_arena = rhs->GetArena();
-  // If arenas differ, inined string fields are swapped by copying values.
-  // Donation status should not be swapped.
-  if (lhs_arena != rhs_arena) {
-    return;
-  }
-  bool lhs_donated = IsInlinedStringDonated(*lhs, field);
-  bool rhs_donated = IsInlinedStringDonated(*rhs, field);
-  if (lhs_donated == rhs_donated) {
-    return;
-  }
-  // If one is undonated, both must have already registered ArenaDtor.
-  uint32_t* lhs_array = MutableInlinedStringDonatedArray(lhs);
-  uint32_t* rhs_array = MutableInlinedStringDonatedArray(rhs);
-  ABSL_CHECK_EQ(lhs_array[0] & 0x1u, 0u);
-  ABSL_CHECK_EQ(rhs_array[0] & 0x1u, 0u);
-  // Swap donation status bit.
-  uint32_t index = schema_.InlinedStringIndex(field);
-  ABSL_DCHECK_GT(index, 0u);
-  if (rhs_donated) {
-    SetInlinedStringDonated(index, lhs_array);
-    ClearInlinedStringDonated(index, rhs_array);
-  } else {  // lhs_donated
-    ClearInlinedStringDonated(index, lhs_array);
-    SetInlinedStringDonated(index, rhs_array);
-  }
-}
-
 bool Reflection::IsImplicitPresenceFieldNonEmpty(
     const Message& message, const FieldDescriptor* field) const {
   ABSL_DCHECK(IsMapEntry(field) || !field->has_presence());
@@ -3661,10 +3583,16 @@ void Reflection::PopulateTcParseFastEntries(
       *fast_entries++ = {GetFastParseFunction(nonfield->func),
                          {nonfield->coded_tag, nonfield->nonfield_info}};
     } else if (auto* as_field = fast_field.AsField()) {
-      *fast_entries++ = {
-          GetFastParseFunction(as_field->func),
-          {as_field->coded_tag, as_field->hasbit_idx, as_field->aux_idx,
-           static_cast<uint16_t>(schema_.GetFieldOffset(as_field->field))}};
+      const uint32_t field_offset = schema_.GetFieldOffset(as_field->field);
+      if (static_cast<uint16_t>(field_offset) == field_offset) {
+        *fast_entries++ = {
+            GetFastParseFunction(as_field->func),
+            {as_field->coded_tag, as_field->hasbit_idx, as_field->aux_idx,
+             static_cast<uint16_t>(field_offset)}};
+      } else {
+        // The offset is too large, so just ignore the fast field.
+        *fast_entries++ = {internal::TcParser::MiniParse, {}};
+      }
     } else {
       ABSL_DCHECK(fast_field.is_empty());
       // No fast entry here. Use mini parser.
@@ -3731,10 +3659,6 @@ void Reflection::PopulateTcParseFieldAux(
       case internal::TailCallTableInfo::kNothing:
         *field_aux++ = {};
         break;
-      case internal::TailCallTableInfo::kInlinedStringDonatedOffset:
-        field_aux++->offset =
-            static_cast<uint32_t>(schema_.inlined_string_donated_offset_);
-        break;
       case internal::TailCallTableInfo::kSplitOffset:
         field_aux++->offset = schema_.SplitOffset();
         break;
@@ -3798,8 +3722,6 @@ const internal::TcParseTableBase* Reflection::CreateTcParseTable() const {
         // Might be easier to do when all messages support TDP.
         /* use_direct_tcparser_table */ false,
         schema_.IsSplit(field),
-        is_inlined ? static_cast<int>(schema_.InlinedStringIndex(field))
-                   : kNoHasbit,
         field->cpp_type() == FieldDescriptor::CPPTYPE_STRING &&
             IsMicroString(field),
     });
@@ -3923,12 +3845,14 @@ ReflectionSchema MigrationToReflectionSchema(
   result.extensions_offset_ = next();
   result.oneof_case_offset_ = next();
   result.weak_field_map_offset_ = next();
-  result.inlined_string_donated_offset_ = next();
+  // Old result.inlined_string_donated_offset_
+  ABSL_CHECK_EQ(next(), ~uint32_t{});
   result.split_offset_ = next();
   result.sizeof_split_ = next();
 
   result.has_bit_indices_ = next_pointer();
-  result.inlined_string_indices_ = next_pointer();
+  // Old result.inlined_string_indices_
+  ABSL_CHECK_EQ(next_pointer(), nullptr);
 
   result.offsets_ = offsets + index;
   result.object_size_ = migration_schema.object_size;
@@ -4056,7 +3980,7 @@ void AssignDescriptorsImpl(const DescriptorTable* table, bool eager) {
 void MaybeInitializeLazyDescriptors(const DescriptorTable* table) {
   if (!IsLazilyInitializedFile(table->filename)) {
     // Ensure the generated pool has been lazily initialized.
-    DescriptorPool::generated_pool();
+    (void)DescriptorPool::generated_pool();
   }
 }
 
@@ -4139,7 +4063,9 @@ void UnknownFieldSetSerializer(const uint8_t* base, uint32_t offset,
   const void* ptr = base + offset;
   const InternalMetadata* metadata = static_cast<const InternalMetadata*>(ptr);
   if (metadata->have_unknown_fields()) {
-    metadata->unknown_fields<UnknownFieldSet>(UnknownFieldSet::default_instance)
+    // TODO: Remove this suppression.
+    (void)metadata
+        ->unknown_fields<UnknownFieldSet>(UnknownFieldSet::default_instance)
         .SerializeToCodedStream(output);
   }
 }

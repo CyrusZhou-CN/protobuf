@@ -25,16 +25,13 @@
 #include "absl/container/flat_hash_map.h"
 #include "absl/log/absl_check.h"
 #include "absl/strings/string_view.h"
-#ifdef Py_GIL_DISABLED
-// Only include mutex for free-threaded builds
-#include "absl/synchronization/mutex.h"
-#endif
 #include "google/protobuf/descriptor.h"
 #include "google/protobuf/dynamic_message.h"
 #include "google/protobuf/internal_feature_helper.h"
 #include "google/protobuf/io/coded_stream.h"
 #include "google/protobuf/pyext/descriptor_containers.h"
 #include "google/protobuf/pyext/descriptor_pool.h"
+#include "google/protobuf/pyext/free_threading_mutex.h"
 #include "google/protobuf/pyext/message.h"
 #include "google/protobuf/pyext/message_factory.h"
 #include "google/protobuf/pyext/scoped_pyobject_ptr.h"
@@ -77,51 +74,6 @@ static PyObject* PyFrame_GetGlobals(PyFrameObject* frame) {
 namespace google {
 namespace protobuf {
 namespace python {
-
-// Zero-cost mutex wrapper that compiles away to nothing in GIL-enabled builds.
-// Similar to nanobind's ft_mutex pattern.
-class ABSL_LOCKABLE ABSL_ATTRIBUTE_WARN_UNUSED FreeThreadingMutex {
- public:
-  FreeThreadingMutex() = default;
-  explicit constexpr FreeThreadingMutex(absl::ConstInitType)
-#ifdef Py_GIL_DISABLED
-      : mutex_(absl::kConstInit)
-#endif
-  {
-  }
-  FreeThreadingMutex(const FreeThreadingMutex&) = delete;
-  FreeThreadingMutex& operator=(const FreeThreadingMutex&) = delete;
-
-#ifndef Py_GIL_DISABLED
-  // GIL-enabled build: no-op mutex (zero cost)
-  void Lock() {}
-  void Unlock() {}
-#else
-  // Free-threaded build: real mutex
-  void Lock() ABSL_EXCLUSIVE_LOCK_FUNCTION() { mutex_.Lock(); }
-  void Unlock() ABSL_UNLOCK_FUNCTION() { mutex_.Unlock(); }
-
- private:
-  absl::Mutex mutex_;
-#endif
-};
-
-// RAII lock guard for FreeThreadingMutex
-class ABSL_SCOPED_LOCKABLE FreeThreadingLockGuard {
- public:
-  explicit FreeThreadingLockGuard(FreeThreadingMutex& mutex)
-      ABSL_EXCLUSIVE_LOCK_FUNCTION(mutex)
-      : mutex_(mutex) {
-    mutex_.Lock();
-  }
-  ~FreeThreadingLockGuard() ABSL_UNLOCK_FUNCTION() { mutex_.Unlock(); }
-
-  FreeThreadingLockGuard(const FreeThreadingLockGuard&) = delete;
-  FreeThreadingLockGuard& operator=(const FreeThreadingLockGuard&) = delete;
-
- private:
-  FreeThreadingMutex& mutex_;
-};
 
 // Mutex to protect interned_descriptors from concurrent access in
 // free-threading Python builds. Zero-cost in GIL-enabled builds.
@@ -276,7 +228,8 @@ bool Reparse(PyMessageFactory* message_factory, const Message& from,
              Message* to) {
   // Reparse message.
   std::string serialized;
-  from.SerializeToString(&serialized);
+  // TODO: Remove this suppression.
+  (void)from.SerializeToString(&serialized);
   io::CodedInputStream input(
       reinterpret_cast<const uint8_t*>(serialized.c_str()), serialized.size());
   input.SetExtensionRegistry(message_factory->pool->pool,
@@ -911,22 +864,6 @@ static PyObject* GetCppType(PyBaseDescriptor* self, void* closure) {
   return PyLong_FromLong(_GetDescriptor(self)->cpp_type());
 }
 
-static void WarnDeprecatedLabel() {
-  static int deprecated_label_count = 100;
-  if (deprecated_label_count > 0) {
-    --deprecated_label_count;
-    PyErr_WarnEx(
-        PyExc_DeprecationWarning,
-        "label() is deprecated. Use is_required() or is_repeated() instead.",
-        3);
-  }
-}
-
-static PyObject* GetLabel(PyBaseDescriptor* self, void* closure) {
-  WarnDeprecatedLabel();
-  return PyLong_FromLong(_GetDescriptor(self)->label());
-}
-
 static PyObject* IsRequired(PyBaseDescriptor* self, void* closure) {
   return PyBool_FromLong(_GetDescriptor(self)->is_required());
 }
@@ -1142,7 +1079,6 @@ static PyGetSetDef Getters[] = {
     {"file", (getter)GetFile, nullptr, "File Descriptor"},
     {"type", (getter)GetType, nullptr, "C++ Type"},
     {"cpp_type", (getter)GetCppType, nullptr, "C++ Type"},
-    {"label", (getter)GetLabel, nullptr, "Label"},
     {"is_required", (getter)IsRequired, nullptr, "Is Required"},
     {"is_repeated", (getter)IsRepeated, nullptr, "Is Repeated"},
     {"number", (getter)GetNumber, nullptr, "Number"},
@@ -1555,7 +1491,8 @@ static PyObject* GetSerializedPb(PyFileDescriptor* self, void* closure) {
   FileDescriptorProto file_proto;
   _GetDescriptor(self)->CopyTo(&file_proto);
   std::string contents;
-  file_proto.SerializePartialToString(&contents);
+  // TODO: Remove this suppression.
+  (void)file_proto.SerializePartialToString(&contents);
   self->serialized_pb = PyBytes_FromStringAndSize(
       contents.c_str(), static_cast<size_t>(contents.size()));
   if (self->serialized_pb == nullptr) {

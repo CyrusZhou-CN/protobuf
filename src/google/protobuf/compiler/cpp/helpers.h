@@ -15,7 +15,6 @@
 #include <cstddef>
 #include <cstdint>
 #include <iterator>
-#include <optional>
 #include <string>
 #include <tuple>
 #include <type_traits>
@@ -26,6 +25,7 @@
 #include "absl/strings/str_cat.h"
 #include "absl/strings/str_split.h"
 #include "absl/strings/string_view.h"
+#include "absl/types/optional.h"
 #include "absl/types/span.h"
 #include "google/protobuf/compiler/code_generator.h"
 #include "google/protobuf/compiler/cpp/names.h"
@@ -44,7 +44,7 @@ namespace google {
 namespace protobuf {
 namespace compiler {
 namespace cpp {
-enum class ArenaDtorNeeds { kNone = 0, kOnDemand = 1, kRequired = 2 };
+enum class ArenaDtorNeeds { kNone = 0, kRequired = 1 };
 
 inline absl::string_view ProtobufNamespace(const Options& opts) {
   // This won't be transformed by copybara, since copybara looks for google::protobuf::.
@@ -107,13 +107,11 @@ class MessageSCCAnalyzer;
 
 // Returns true if it's safe to init "field" to zero.
 bool CanInitializeByZeroing(const FieldDescriptor* field,
-                            const Options& options,
-                            MessageSCCAnalyzer* scc_analyzer);
+                            const Options& options);
 // Returns true if it's safe to reset "field" to zero.
 bool CanClearByZeroing(const FieldDescriptor* field);
 // Determines if swap can be implemented via memcpy.
-bool HasTrivialSwap(const FieldDescriptor* field, const Options& options,
-                    MessageSCCAnalyzer* scc_analyzer);
+bool HasTrivialSwap(const FieldDescriptor* field, const Options& options);
 
 PROTOC_EXPORT std::string ClassName(const Descriptor* descriptor);
 PROTOC_EXPORT std::string ClassName(const EnumDescriptor* enum_descriptor);
@@ -376,14 +374,14 @@ PROTOC_EXPORT bool IsRarelyPresent(const FieldDescriptor* field,
 // Returns true if `field` is likely to be present based on PDProto profile.
 bool IsLikelyPresent(const FieldDescriptor* field, const Options& options);
 
-std::optional<float> GetPresenceProbability(const FieldDescriptor* field,
-                                            const Options& options);
+absl::optional<float> GetPresenceProbability(const FieldDescriptor* field,
+                                             const Options& options);
 
 // GetFieldGroupPresenceProbability computes presence probability for a group of
 // fields. It uses the absence probability (easier to compute)
 // (1 - p1) * (1 - p2) * ... * (1 - pn), and in the end the aggregate presence
 // probability can be expressed as (1 - all_absent_probability).
-std::optional<float> GetFieldGroupPresenceProbability(
+absl::optional<float> GetFieldGroupPresenceProbability(
     const std::vector<const FieldDescriptor*>& fields, const Options& options);
 
 // Returns the "hasbit mode" of the field, which may depend on profile data.
@@ -413,12 +411,10 @@ inline bool IsFieldInlined(const FieldDescriptor* field,
 }
 
 // Does the given FileDescriptor use lazy fields?
-bool HasLazyFields(const FileDescriptor* file, const Options& options,
-                   MessageSCCAnalyzer* scc_analyzer);
+bool HasLazyFields(const FileDescriptor* file, const Options& options);
 
 // Is the given field a supported lazy field?
-bool IsLazy(const FieldDescriptor* field, const Options& options,
-            MessageSCCAnalyzer* scc_analyzer);
+bool IsLazy(const FieldDescriptor* field, const Options& options);
 
 // Is this an explicit (non-profile driven) lazy field, as denoted by
 // lazy/unverified_lazy in the descriptor?
@@ -435,18 +431,15 @@ inline bool IsExplicitLazy(const FieldDescriptor* field) {
 }
 
 internal::field_layout::TransformValidation GetLazyStyle(
-    const FieldDescriptor* field, const Options& options,
-    MessageSCCAnalyzer* scc_analyzer);
+    const FieldDescriptor* field, const Options& options);
 
-bool IsEagerlyVerifiedLazy(const FieldDescriptor* field, const Options& options,
-                           MessageSCCAnalyzer* scc_analyzer);
+bool IsEagerlyVerifiedLazy(const FieldDescriptor* field,
+                           const Options& options);
 
 bool IsLazilyVerifiedLazy(const FieldDescriptor* field, const Options& options);
 
-bool ShouldVerify(const Descriptor* descriptor, const Options& options,
-                  MessageSCCAnalyzer* scc_analyzer);
-bool ShouldVerify(const FileDescriptor* file, const Options& options,
-                  MessageSCCAnalyzer* scc_analyzer);
+bool ShouldVerify(const Descriptor* descriptor, const Options& options);
+bool ShouldVerify(const FileDescriptor* file, const Options& options);
 bool ShouldVerifyRecursively(const FieldDescriptor* field);
 
 // Indicates whether to use predefined verify methods for a given message. If a
@@ -528,8 +521,7 @@ bool IsV2EnabledForMessage(const Descriptor* descriptor,
 
 // Returns true if a message (descriptor) needs v2 verify function because it
 // may (transitively) contain a required field.
-bool ShouldVerifyV2(const Descriptor* descriptor, const Options& options,
-                    MessageSCCAnalyzer* scc_analyzer);
+bool ShouldVerifyV2(const Descriptor* descriptor, const Options& options);
 
 
 // Does this file have generated parsing, serialization, and other
@@ -777,7 +769,7 @@ template <bool do_nested_types, class T>
 void ForEachField(const Descriptor* d, T&& func) {
   if (do_nested_types) {
     for (int i = 0; i < d->nested_type_count(); i++) {
-      ForEachField<true>(d->nested_type(i), std::forward<T&&>(func));
+      ForEachField<true>(d->nested_type(i), std::forward<T>(func));
     }
   }
   for (int i = 0; i < d->extension_count(); i++) {
@@ -791,7 +783,7 @@ void ForEachField(const Descriptor* d, T&& func) {
 template <class T>
 void ForEachField(const FileDescriptor* d, T&& func) {
   for (int i = 0; i < d->message_type_count(); i++) {
-    ForEachField<true>(d->message_type(i), std::forward<T&&>(func));
+    ForEachField<true>(d->message_type(i), std::forward<T>(func));
   }
   for (int i = 0; i < d->extension_count(); i++) {
     func(d->extension(i));
@@ -884,8 +876,7 @@ bool UsingImplicitWeakFields(const FileDescriptor* file,
                              const Options& options);
 
 // Indicates whether to treat this field as implicitly weak.
-bool IsImplicitWeakField(const FieldDescriptor* field, const Options& options,
-                         MessageSCCAnalyzer* scc_analyzer);
+bool IsImplicitWeakField(const FieldDescriptor* field, const Options& options);
 
 inline std::string SimpleBaseClass(const Descriptor* desc,
                                    const Options& options) {
@@ -1220,8 +1211,8 @@ bool HasMessageFieldOrExtension(const Descriptor* desc);
 // be annotated with `field`.
 std::vector<io::Printer::Sub> AnnotatedAccessors(
     const FieldDescriptor* field, absl::Span<const absl::string_view> prefixes,
-    std::optional<google::protobuf::io::AnnotationCollector::Semantic> semantic =
-        std::nullopt);
+    absl::optional<google::protobuf::io::AnnotationCollector::Semantic> semantic =
+        absl::nullopt);
 
 // Check whether `file` represents the .proto file FileDescriptorProto and
 // friends. This file needs special handling because it must be usable during
@@ -1246,69 +1237,6 @@ bool HasOnDeserializeTracker(const Descriptor* descriptor,
 // `&ClassName::PostLoopHandler` which should be a static function of the right
 // signature.
 bool NeedsPostLoopHandler(const Descriptor* descriptor, const Options& options);
-
-// Emit the repeated field getter for the custom options.
-// Depending on the bounds check mode specified, this will emit the
-// corresponding getter.
-inline auto GetEmitRepeatedFieldGetterSub(const Options& options,
-                                          io::Printer* p) {
-  return io::Printer::Sub{
-      "getter",
-      [&options, p] {
-        switch (options.bounds_check_mode) {
-          case BoundsCheckMode::kNoEnforcement:
-            p->Emit(R"cc(_internal_$name_internal$().Get(index))cc");
-            break;
-          case BoundsCheckMode::kReturnDefaultValue:
-            p->Emit(R"cc(
-              $pbi$::CheckedGetOrDefault(_internal_$name_internal$(), index)
-            )cc");
-            break;
-          case BoundsCheckMode::kAbort:
-            p->Emit(R"cc(
-              $pbi$::CheckedGetOrAbort(_internal_$name_internal$(), index)
-            )cc");
-            break;
-        }
-      }}
-      .WithSuffix("");
-}
-
-// Emit the code for getting a mutable element from a repeated field. This will
-// generate different code depending on the `bounds_check_mode` specified in the
-// options.
-// TODO: b/347304492 Harden this function by taking in the field and checking
-// if splitting is supported.
-inline auto GetEmitRepeatedFieldMutableSub(const Options& options,
-                                           io::Printer* p,
-                                           bool use_stringpiecefield = false) {
-  return io::Printer::Sub{
-      "mutable",
-      [&options, p, use_stringpiecefield] {
-        switch (options.bounds_check_mode) {
-          case BoundsCheckMode::kNoEnforcement:
-          case BoundsCheckMode::kReturnDefaultValue:
-            if (use_stringpiecefield) {
-              p->Emit("$field$.Mutable(index)");
-            } else {
-              p->Emit(
-                  R"cc(_internal_mutable_$name_internal$()->Mutable(index))cc");
-            }
-            break;
-          case BoundsCheckMode::kAbort:
-            if (use_stringpiecefield) {
-              p->Emit("$pbi$::CheckedMutableOrAbort(&$field$, index)");
-            } else {
-              p->Emit(R"cc(
-                $pbi$::CheckedMutableOrAbort(
-                    _internal_mutable_$name_internal$(), index)
-              )cc");
-            }
-            break;
-        }
-      }}
-      .WithSuffix("");
-}
 
 // Priority used for static initializers.
 enum InitPriority {

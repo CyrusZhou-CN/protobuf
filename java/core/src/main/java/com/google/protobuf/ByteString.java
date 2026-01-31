@@ -78,7 +78,7 @@ public abstract class ByteString implements Iterable<Byte>, Serializable {
    *
    * <p>One of the noticeable costs of copying a byte[] into a new array using {@code
    * System.arraycopy} is nullification of a new buffer before the copy. It has been shown the
-   * Hotspot VM is capable to intrisicfy {@code Arrays.copyOfRange} operation to avoid this
+   * Hotspot VM is capable of intrinsic {@code Arrays.copyOfRange} operation to avoid this
    * expensive nullification and provide substantial performance gain. Unfortunately this does not
    * hold on Android runtimes and could make the copy slightly slower due to additional code in the
    * {@code Arrays.copyOfRange}. Thus we provide two different implementation for array copier for
@@ -405,6 +405,9 @@ public abstract class ByteString implements Iterable<Byte>, Serializable {
 
   static ByteString copyFrom(byte[] bytes, int offset, int size, boolean requireUtf8)
       throws InvalidProtocolBufferException {
+    if (size == 0) {
+      return EMPTY;
+    }
     checkRange(offset, offset + size, bytes.length);
     if (requireUtf8 && !Utf8.isValidUtf8(bytes, offset, offset + size)) {
       throw InvalidProtocolBufferException.invalidUtf8();
@@ -437,6 +440,9 @@ public abstract class ByteString implements Iterable<Byte>, Serializable {
 
   static ByteString wrap(ByteBuffer buffer, boolean requireUtf8)
       throws InvalidProtocolBufferException {
+    if (buffer.remaining() == 0) {
+      return EMPTY;
+    }
     if (requireUtf8 && !Utf8.isValidUtf8(buffer)) {
       throw InvalidProtocolBufferException.invalidUtf8();
     }
@@ -465,10 +471,12 @@ public abstract class ByteString implements Iterable<Byte>, Serializable {
   }
 
   static ByteString wrap(byte[] bytes, boolean requireUtf8) throws InvalidProtocolBufferException {
+    if (bytes.length == 0) {
+      return EMPTY;
+    }
     if (requireUtf8 && !Utf8.isValidUtf8(bytes)) {
       throw InvalidProtocolBufferException.invalidUtf8();
     }
-    // TODO: Return EMPTY when bytes are empty to reduce allocations?
     return new LiteralByteString(bytes);
   }
 
@@ -503,6 +511,9 @@ public abstract class ByteString implements Iterable<Byte>, Serializable {
    * @throws IndexOutOfBoundsException if {@code size > bytes.remaining()}
    */
   public static ByteString copyFrom(ByteBuffer bytes, int size) {
+    if (size == 0) {
+      return EMPTY;
+    }
     checkRange(0, size, bytes.remaining());
     byte[] copy = new byte[size];
     bytes.get(copy);
@@ -527,10 +538,13 @@ public abstract class ByteString implements Iterable<Byte>, Serializable {
    * @param charsetName encoding to use
    * @return new {@code ByteString}
    * @throws UnsupportedEncodingException if the encoding isn't found
+   * @deprecated Use either {@link #copyFromUtf8(String)} or {@link #copyFrom(String, Charset)}
+   *     instead.
    */
-  public static ByteString copyFrom(String text, String charsetName)
-      throws UnsupportedEncodingException {
-    return new LiteralByteString(text.getBytes(charsetName));
+  @Deprecated
+  public
+  static ByteString copyFrom(String text, String charsetName) throws UnsupportedEncodingException {
+    return text.isEmpty() ? EMPTY : new LiteralByteString(text.getBytes(charsetName));
   }
 
   /**
@@ -542,7 +556,7 @@ public abstract class ByteString implements Iterable<Byte>, Serializable {
    * @return new {@code ByteString}
    */
   public static ByteString copyFrom(String text, Charset charset) {
-    return new LiteralByteString(text.getBytes(charset));
+    return text.isEmpty() ? EMPTY : new LiteralByteString(text.getBytes(charset));
   }
 
   /**
@@ -553,7 +567,7 @@ public abstract class ByteString implements Iterable<Byte>, Serializable {
    * @return new {@code ByteString}
    */
   public static ByteString copyFromUtf8(String text) {
-    return new LiteralByteString(text.getBytes(Internal.UTF_8));
+    return text.isEmpty() ? EMPTY : new LiteralByteString(text.getBytes(Internal.UTF_8));
   }
 
   // =================================================================
@@ -719,7 +733,8 @@ public abstract class ByteString implements Iterable<Byte>, Serializable {
   // iterable.
   private static ByteString balancedConcat(Iterator<ByteString> iterator, int length) {
     if (length < 1) {
-      throw new IllegalArgumentException(String.format("length (%s) must be >= 1", length));
+      throw new IllegalArgumentException(
+          String.format(Locale.ROOT, "length (%s) must be >= 1", length));
     }
     ByteString result;
     if (length == 1) {
@@ -758,8 +773,8 @@ public abstract class ByteString implements Iterable<Byte>, Serializable {
    * @param targetOffset offset within the target buffer
    * @param numberToCopy number of bytes to copy
    * @throws IndexOutOfBoundsException if an offset or size is negative or too large
-   * @deprecated Instead, call {@code byteString.substring(sourceOffset, sourceOffset +
-   *     numberToCopy).copyTo(target, targetOffset)}
+   * @deprecated Use {@code byteString.substring(sourceOffset, sourceOffset +
+   *     numberToCopy).copyTo(target, targetOffset)} instead.
    */
   @Deprecated
   public final void copyTo(byte[] target, int sourceOffset, int targetOffset, int numberToCopy) {
@@ -887,8 +902,11 @@ public abstract class ByteString implements Iterable<Byte>, Serializable {
    * @param charsetName encode using this charset
    * @return new string
    * @throws UnsupportedEncodingException if charset isn't recognized
+   * @deprecated Use either {@link #toStringUtf8()} or {@link #toString(Charset)} instead.
    */
-  public final String toString(String charsetName) throws UnsupportedEncodingException {
+  @Deprecated
+  public
+  final String toString(String charsetName) throws UnsupportedEncodingException {
     try {
       return toString(Charset.forName(charsetName));
     } catch (UnsupportedCharsetException e) {
@@ -906,7 +924,7 @@ public abstract class ByteString implements Iterable<Byte>, Serializable {
    * @return new string
    */
   public final String toString(Charset charset) {
-    return size() == 0 ? "" : toStringInternal(charset);
+    return isEmpty() ? "" : toStringInternal(charset);
   }
 
   /**
@@ -938,7 +956,7 @@ public abstract class ByteString implements Iterable<Byte>, Serializable {
    *
    * <pre>{@code
    * Arrays.equals(byteString.toByteArray(),
-   *     new String(byteString.toByteArray(), "UTF-8").getBytes("UTF-8"))
+   *     new String(byteString.toByteArray(), UTF_8).getBytes(UTF_8))
    * }</pre>
    *
    * <p>This method returns {@code false} for "overlong" byte sequences, as well as for 3-byte
@@ -947,9 +965,8 @@ public abstract class ByteString implements Iterable<Byte>, Serializable {
    * been modified to also reject "overlong" byte sequences, but (as of 2011) still accepts 3-byte
    * surrogate character byte sequences.
    *
-   * <p>See the Unicode Standard,<br>
-   * Table 3-6. <em>UTF-8 Bit Distribution</em>,<br>
-   * Table 3-7. <em>Well Formed UTF-8 Byte Sequences</em>.
+   * <p>See the Unicode Standard, Table 3-6 <em>UTF-8 Bit Distribution</em>, and Table 3-7 <em>Well
+   * Formed UTF-8 Byte Sequences</em>.
    *
    * @return whether the bytes in this {@code ByteString} are a well-formed UTF-8 byte sequence
    */
@@ -1233,8 +1250,10 @@ public abstract class ByteString implements Iterable<Byte>, Serializable {
     @Override
     public String toString() {
       return String.format(
+          Locale.ROOT,
           "<ByteString.Output@%s size=%d>",
-          Integer.toHexString(System.identityHashCode(this)), size());
+          Integer.toHexString(System.identityHashCode(this)),
+          size());
     }
 
     /**

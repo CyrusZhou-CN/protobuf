@@ -782,6 +782,17 @@ void ImmutableMessageGenerator::GenerateDescriptorMethods(
         "fileclass", name_resolver_->GetImmutableClassName(descriptor_->file()),
         "identifier", UniqueFileScopeIdentifier(descriptor_));
   }
+
+  printer->Print(
+      "@java.lang.Override\n"
+      "public com.google.protobuf.Descriptors.Descriptor "
+      "getDescriptorForType() {\n"
+      "  return $fileclass$.internal_$identifier$_descriptor;\n"
+      "}\n"
+      "\n",
+      "fileclass", name_resolver_->GetImmutableClassName(descriptor_->file()),
+      "identifier", UniqueFileScopeIdentifier(descriptor_));
+
   std::vector<const FieldDescriptor*> map_fields;
   for (int i = 0; i < descriptor_->field_count(); i++) {
     const FieldDescriptor* field = descriptor_->field(i);
@@ -848,6 +859,11 @@ void ImmutableMessageGenerator::GenerateIsInitialized(io::Printer* printer) {
     // isInitialized() is always true.
     if (!HasRequiredFields(descriptor_)) {
       printer->Print(
+          "/**\n"
+          "  * @deprecated This always returns true for this type as it \n"
+          "  *   does not transitively contain any required fields.\n"
+          "  */\n"
+          "@java.lang.Deprecated\n"
           "@java.lang.Override\n"
           "public final boolean isInitialized() {\n"
           "  return true;\n"

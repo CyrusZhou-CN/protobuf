@@ -16,7 +16,6 @@
 #include <iterator>
 #include <list>
 #include <memory>
-#include <optional>
 #include <string>
 #include <type_traits>
 #include <utility>
@@ -27,6 +26,7 @@
 #include "absl/log/absl_check.h"
 #include "absl/numeric/bits.h"
 #include "absl/strings/str_cat.h"
+#include "absl/types/optional.h"
 #include "absl/types/span.h"
 #include "google/protobuf/arena_test_util.h"
 #include "google/protobuf/io/coded_stream.h"
@@ -346,7 +346,7 @@ TEST(RepeatedPtrFieldTest, NaturalGrowthOnArenasReuseBlocks) {
   std::vector<Field*> fields;
   static constexpr int kNumFields = 100;
   static constexpr int kNumElems = 1000;
-  std::optional<int> common_capacity;
+  absl::optional<int> common_capacity;
   for (int i = 0; i < kNumFields; ++i) {
     fields.push_back(Arena::Create<Field>(&arena));
     auto& field = *fields.back();
@@ -1173,51 +1173,18 @@ TEST(RepeatedPtrFieldTest, DeleteSubrange) {
 
 TEST(RepeatedPtrFieldTest, Cleanups) {
   Arena arena;
-  auto growth = internal::CleanupGrowth(
-      arena, [&] { Arena::Create<RepeatedPtrField<std::string>>(&arena); });
+  auto growth = internal::CleanupGrowth(arena, [&] {
+    (void)Arena::Create<RepeatedPtrField<std::string>>(&arena);
+  });
   EXPECT_THAT(growth.cleanups, testing::IsEmpty());
 
-  growth = internal::CleanupGrowth(
-      arena, [&] { Arena::Create<RepeatedPtrField<TestAllTypes>>(&arena); });
+  growth = internal::CleanupGrowth(arena, [&] {
+    (void)Arena::Create<RepeatedPtrField<TestAllTypes>>(&arena);
+  });
   EXPECT_THAT(growth.cleanups, testing::IsEmpty());
 }
 
 
-TEST(RepeatedPtrFieldDeathTest, CheckedGetOrAbortTest) {
-  RepeatedPtrField<std::string> field;
-
-  // Empty container tests.
-  EXPECT_DEATH(internal::CheckedGetOrAbort(field, -1),
-               "Index \\(-1\\) out of bounds of container with size \\(0\\)");
-  EXPECT_DEATH(internal::CheckedGetOrAbort(field, field.size()),
-               "Index \\(0\\) out of bounds of container with size \\(0\\)");
-
-  // Non-empty container tests
-  field.Add()->assign("foo");
-  field.Add()->assign("bar");
-  EXPECT_DEATH(internal::CheckedGetOrAbort(field, 2),
-               "Index \\(2\\) out of bounds of container with size \\(2\\)");
-  EXPECT_DEATH(internal::CheckedGetOrAbort(field, -1),
-               "Index \\(-1\\) out of bounds of container with size \\(2\\)");
-}
-
-TEST(RepeatedPtrFieldDeathTest, CheckedMutableOrAbortTest) {
-  RepeatedPtrField<std::string> field;
-
-  // Empty container tests.
-  EXPECT_DEATH(internal::CheckedMutableOrAbort(&field, -1),
-               "Index \\(-1\\) out of bounds of container with size \\(0\\)");
-  EXPECT_DEATH(internal::CheckedMutableOrAbort(&field, field.size()),
-               "Index \\(0\\) out of bounds of container with size \\(0\\)");
-
-  // Non-empty container tests
-  field.Add()->assign("foo");
-  field.Add()->assign("bar");
-  EXPECT_DEATH(internal::CheckedMutableOrAbort(&field, 2),
-               "Index \\(2\\) out of bounds of container with size \\(2\\)");
-  EXPECT_DEATH(internal::CheckedMutableOrAbort(&field, -1),
-               "Index \\(-1\\) out of bounds of container with size \\(2\\)");
-}
 // ===================================================================
 
 class RepeatedPtrFieldIteratorTest : public testing::Test {
