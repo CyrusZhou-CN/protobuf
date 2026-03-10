@@ -14123,6 +14123,9 @@ typedef enum {
   // Only inside message table.
   UPB_DEFTYPE_FIELD = 0,
   UPB_DEFTYPE_ONEOF = 1,
+
+  // Only inside service table.
+  UPB_DEFTYPE_METHOD = 0,
 } upb_deftype_t;
 
 #ifdef __cplusplus
@@ -14181,8 +14184,14 @@ const upb_MessageDef* upb_DefPool_FindMessageByNameWithSize(
 UPB_API const upb_EnumDef* upb_DefPool_FindEnumByName(const upb_DefPool* s,
                                                       const char* sym);
 
-const upb_EnumValueDef* upb_DefPool_FindEnumByNameval(const upb_DefPool* s,
-                                                      const char* sym);
+UPB_API const upb_EnumDef* upb_DefPool_FindEnumByNameWithSize(
+    const upb_DefPool* s, const char* sym, size_t len);
+
+UPB_API const upb_EnumValueDef* upb_DefPool_FindEnumValueByName(
+    const upb_DefPool* s, const char* sym);
+
+UPB_API const upb_EnumValueDef* upb_DefPool_FindEnumValueByNameWithSize(
+    const upb_DefPool* s, const char* sym, size_t len);
 
 UPB_API const upb_FileDef* upb_DefPool_FindFileByName(const upb_DefPool* s,
                                                       const char* name);
@@ -14237,6 +14246,16 @@ const upb_FieldDef** upb_DefPool_GetAllExtensions(const upb_DefPool* s,
 // default value.
 UPB_API void upb_DefPool_DisableClosedEnumChecking(upb_DefPool* s);
 bool upb_DefPool_ClosedEnumCheckingDisabled(const upb_DefPool* s);
+
+// If called, implicit field presence will be disabled.
+// This is non-standard behavior and will cause conformance tests to fail, but
+// it can be used in situations where where the non-conformance is acceptable.
+//
+// This function may only be called immediately after upb_DefPool_New().
+// It is an error to call it on an existing def pool or after defs have
+// already been added to the pool.
+UPB_API void upb_DefPool_DisableImplicitFieldPresence(upb_DefPool* s);
+bool upb_DefPool_ImplicitFieldPresenceDisabled(const upb_DefPool* s);
 
 #ifdef __cplusplus
 } /* extern "C" */
@@ -14722,6 +14741,8 @@ extern "C" {
 UPB_API const upb_FileDef* upb_ServiceDef_File(const upb_ServiceDef* s);
 const upb_MethodDef* upb_ServiceDef_FindMethodByName(const upb_ServiceDef* s,
                                                      const char* name);
+const upb_MethodDef* upb_ServiceDef_FindMethodByNameWithSize(
+    const upb_ServiceDef* s, const char* name, size_t len);
 UPB_API const char* upb_ServiceDef_FullName(const upb_ServiceDef* s);
 bool upb_ServiceDef_HasOptions(const upb_ServiceDef* s);
 int upb_ServiceDef_Index(const upb_ServiceDef* s);
@@ -17084,6 +17105,7 @@ const upb_MiniTableExtension* _upb_FileDef_ExtensionMiniTable(
 const int32_t* _upb_FileDef_PublicDependencyIndexes(const upb_FileDef* f);
 const int32_t* _upb_FileDef_WeakDependencyIndexes(const upb_FileDef* f);
 bool _upb_FileDef_ClosedEnumCheckingDisabled(const upb_FileDef* f);
+bool _upb_FileDef_ImplicitFieldPresenceDisabled(const upb_FileDef* f);
 
 // upb_FileDef_Package() returns "" if f->package is NULL, this does not.
 const char* _upb_FileDef_RawPackage(const upb_FileDef* f);
@@ -17409,6 +17431,9 @@ upb_ServiceDef* _upb_ServiceDefs_New(
     upb_DefBuilder* ctx, int n,
     const google_protobuf_ServiceDescriptorProto* const* protos,
     const google_protobuf_FeatureSet* parent_features);
+
+void _upb_ServiceDef_InsertMethod(upb_DefBuilder* ctx, upb_ServiceDef* s,
+                                  const upb_MethodDef* m);
 
 #ifdef __cplusplus
 } /* extern "C" */
