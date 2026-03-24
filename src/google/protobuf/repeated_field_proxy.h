@@ -23,6 +23,19 @@ namespace protobuf {
 template <typename ElementType>
 class RepeatedFieldProxy;
 
+template <int&... DeductionBarrier, typename T, typename Pred>
+size_t erase_if(RepeatedFieldProxy<T> cont, Pred pred);
+template <int&... DeductionBarrier, typename T, typename U>
+size_t erase(RepeatedFieldProxy<T> cont, const U& value);
+template <int&... DeductionBarrier, typename T, typename Compare>
+void c_sort(RepeatedFieldProxy<T> cont, Compare cmp);
+template <int&... DeductionBarrier, typename T>
+void c_sort(RepeatedFieldProxy<T> cont);
+template <int&... DeductionBarrier, typename T, typename Compare>
+void c_stable_sort(RepeatedFieldProxy<T> cont, Compare cmp);
+template <int&... DeductionBarrier, typename T>
+void c_stable_sort(RepeatedFieldProxy<T> cont);
+
 namespace internal {
 
 template <typename T, typename... Args>
@@ -122,6 +135,8 @@ struct RepeatedFieldTraits {
   using type = RepeatedField<ElementType>;
   using const_reference = ElementType;
   using reference = ElementType;
+  using const_iterator = typename type::const_iterator;
+  using iterator = typename type::iterator;
 };
 
 // Specialization for message types.
@@ -133,6 +148,8 @@ struct RepeatedFieldTraits<
   using type = RepeatedPtrField<ElementType>;
   using const_reference = const ElementType&;
   using reference = ElementType&;
+  using const_iterator = typename type::const_iterator;
+  using iterator = typename type::iterator;
 };
 
 // Explicit specializations for string types.
@@ -141,6 +158,8 @@ struct RepeatedFieldTraits<absl::string_view> {
   using type = RepeatedPtrField<std::string>;
   using const_reference = absl::string_view;
   using reference = absl::string_view;
+  using const_iterator = RepeatedPtrIterator<const absl::string_view>;
+  using iterator = RepeatedPtrIterator<absl::string_view>;
 };
 
 template <>
@@ -148,6 +167,8 @@ struct RepeatedFieldTraits<std::string> {
   using type = RepeatedPtrField<std::string>;
   using const_reference = const std::string&;
   using reference = std::string&;
+  using const_iterator = typename type::const_iterator;
+  using iterator = typename type::iterator;
 };
 
 template <>
@@ -155,6 +176,8 @@ struct RepeatedFieldTraits<absl::Cord> {
   using type = RepeatedField<absl::Cord>;
   using const_reference = const absl::Cord&;
   using reference = absl::Cord&;
+  using const_iterator = typename type::const_iterator;
+  using iterator = typename type::iterator;
 };
 
 // The base class for both mutable and const repeated field proxies. Implements
@@ -185,9 +208,9 @@ class RepeatedFieldProxyBase {
   // This is important, as the concrete type of the iterator leaks the
   // underlying container type. With a forbidden spelling, we have the
   // flexibility to change the iterator type without breaking user code.
-  using const_iterator = typename RepeatedFieldType::const_iterator;
-  using iterator = std::conditional_t<kIsConst, const_iterator,
-                                      typename RepeatedFieldType::iterator>;
+  using const_iterator = typename Traits::const_iterator;
+  using iterator =
+      std::conditional_t<kIsConst, const_iterator, typename Traits::iterator>;
   using const_reverse_iterator = std::reverse_iterator<const_iterator>;
   using reverse_iterator = std::reverse_iterator<iterator>;
 
@@ -219,12 +242,22 @@ class RepeatedFieldProxyBase {
     return static_cast<size_type>(field().size());
   }
 
+  // Returns a const reference or view into the element at the given index,
+  // performing bounds checking in accordance with `bounds_check_mode_*`.
+  [[nodiscard]] const_reference get(size_type index) const {
+    return field()[index];
+  }
+
   [[nodiscard]] const_iterator cbegin() const { return begin(); }
   [[nodiscard]] const_iterator cend() const { return end(); }
-  [[nodiscard]] iterator begin() const { return field().begin(); }
-  [[nodiscard]] iterator end() const { return field().end(); }
-  [[nodiscard]] reverse_iterator rbegin() const { return field().rbegin(); }
-  [[nodiscard]] reverse_iterator rend() const { return field().rend(); }
+  [[nodiscard]] iterator begin() const { return iterator(field().begin()); }
+  [[nodiscard]] iterator end() const { return iterator(field().end()); }
+  [[nodiscard]] reverse_iterator rbegin() const {
+    return reverse_iterator(end());
+  }
+  [[nodiscard]] reverse_iterator rend() const {
+    return reverse_iterator(begin());
+  }
 
  protected:
   explicit RepeatedFieldProxyBase(ConstQualifiedRepeatedFieldType& field)
@@ -387,6 +420,36 @@ class RepeatedFieldProxyWithEmplaceBack<
   }
 };
 
+// Defines `resize(new_size, value)` for all non-string repeated fields.
+template <typename ElementType, typename Enable = void>
+class RepeatedFieldProxyWithResize {
+ public:
+  void resize(size_t new_size, const ElementType& value) const {
+    ToProxyType(this).field().resize(new_size, value);
+  }
+};
+
+// Defines `resize(new_size, value)` for non-Cord string repeated fields.
+template <typename ElementType>
+class RepeatedFieldProxyWithResize<
+    ElementType, std::enable_if_t<RepeatedElementTypeIsString<ElementType> &&
+                                  !std::is_same_v<ElementType, absl::Cord>>> {
+ public:
+  void resize(size_t new_size, absl::string_view value) const {
+    ToProxyType(this).field().resize(new_size, value);
+  }
+};
+
+// Defines `resize(new_size, value)` for repeated Cords.
+template <typename ElementType>
+class RepeatedFieldProxyWithResize<
+    ElementType, std::enable_if_t<std::is_same_v<ElementType, absl::Cord>>> {
+ public:
+  void resize(size_t new_size, const absl::Cord& value) const {
+    ToProxyType(this).field().resize(new_size, value);
+  }
+};
+
 }  // namespace internal
 
 // A proxy for a repeated field of type `ElementType` in a Protobuf message.
@@ -405,7 +468,8 @@ class PROTOBUF_DECLSPEC_EMPTY_BASES RepeatedFieldProxy final
     : public internal::RepeatedFieldProxyBase<ElementType>,
       public internal::RepeatedFieldProxyWithSet<ElementType>,
       public internal::RepeatedFieldProxyWithPushBack<ElementType>,
-      public internal::RepeatedFieldProxyWithEmplaceBack<ElementType> {
+      public internal::RepeatedFieldProxyWithEmplaceBack<ElementType>,
+      public internal::RepeatedFieldProxyWithResize<ElementType> {
   static_assert(!std::is_const_v<ElementType>);
 
  protected:
@@ -423,7 +487,9 @@ class PROTOBUF_DECLSPEC_EMPTY_BASES RepeatedFieldProxy final
 
  public:
   RepeatedFieldProxy(const RepeatedFieldProxy& other) = default;
-  RepeatedFieldProxy& operator=(const RepeatedFieldProxy&) = default;
+  // Mutable proxies are not assignable. This is intentional to avoid confusion
+  // with the `assign` method, which reassigns the underlying repeated field.
+  RepeatedFieldProxy& operator=(const RepeatedFieldProxy&) = delete;
 
   // Returns a type which references the element at the given index. Performs
   // bounds checking in accordance with `bounds_check_mode_*`.
@@ -431,16 +497,134 @@ class PROTOBUF_DECLSPEC_EMPTY_BASES RepeatedFieldProxy final
     return field()[index];
   }
 
+  // Removes the last element from the repeated field.
+  void pop_back() const { field().RemoveLast(); }
+
+  // Removes all elements from the repeated field. The field will be empty after
+  // this call.
+  void clear() const { field().Clear(); }
+
+  // Removes the element at `position` from the repeated field. Returns an
+  // iterator to the element immediately following the removed element.
+  iterator erase(const_iterator position) const {
+    // The internal iterator type may not match the proxy iterator type (for
+    // example for `absl::string_view` proxies which are backed by
+    // `std::string`). To avoid special casing, we will always cast to the
+    // internal iterator type before passing down to erase, then cast back to
+    // the proxy iterator type upon return. This conversion is redundant for
+    // types which have matching exposed and internal element types.
+    using const_internal_iterator = typename RepeatedFieldType::const_iterator;
+    return iterator(
+        ToProxyType(this).field().erase(const_internal_iterator(position)));
+  }
+
+  // Removes the elements in the range `[first, last)` from the repeated field.
+  // Returns an iterator to the element immediately following the last removed
+  // element.
+  iterator erase(const_iterator first, const_iterator last) const {
+    using const_internal_iterator = typename RepeatedFieldType::const_iterator;
+    return iterator(ToProxyType(this).field().erase(
+        const_internal_iterator(first), const_internal_iterator(last)));
+  }
+
+  // Copy-assigns `other` into this repeated field.
+  //
+  // This method exists because proxies cannot be reassigned through the `=`
+  // assignment operator.
+  void assign(RepeatedFieldProxy<const ElementType> other) const {
+    field().CopyFrom(other.field());
+  }
+
+  // Copy-assigns the elements in the range `[begin, end)` to the repeated
+  // field.
+  //
+  // If `begin` or `end` is an iterator into this repeated field, the behavior
+  // is undefined.
+  template <
+      typename Iter,
+      // A seemingly redundant verification that `Iter` is an iterator type.
+      // Even though we use `std::iterator_traits` below, we duplicate the
+      // condition here in case the implementation changes.
+      typename = std::void_t<typename std::iterator_traits<Iter>::value_type>>
+  auto assign(Iter begin, Iter end) const
+      // Verify that the iterator value type is assignable to `ElementType`.
+      // Pass through `push_back`, which is a catch-all for allowed conversions
+      // to the element type.
+      -> std::void_t<decltype(this->push_back(*begin))> {
+    field().Clear();
+    // Forward iterators in C++ are required to model `std::incrementable`,
+    // which means they are suitable for multi-pass algorithms, and therefore
+    // support `std::distance`.
+    if constexpr (std::is_base_of<std::forward_iterator_tag,
+                                  typename std::iterator_traits<
+                                      Iter>::iterator_category>::value) {
+      int distance = static_cast<int>(std::distance(begin, end));
+      field().ReserveWithArena(arena(), distance);
+    }
+    for (; begin != end; ++begin) {
+      this->push_back(*begin);
+    }
+  }
+
+  // Move-assigns `other` into this repeated field. `other` is left in a valid
+  // but unspecified state.
+  void move_assign(RepeatedFieldProxy<ElementType> other) const {
+    field() = std::move(other.field());
+  }
+
+  // A hint to the container to expect to grow/shrink to `new_size` elements.
+  // This may allow the container to make optimizations to avoid reallocations,
+  // but may also be ignored.
+  void reserve(size_type new_size) const {
+    field().ReserveWithArena(arena(), new_size);
+  }
+
+  // Swaps the contents of this repeated field with `other`.
+  //
+  // Invalidates all iterators. Pointer stability is not guaranteed across the
+  // swap for any element of either repeated field.
+  //
+  // If the underlying repeated fields are on different arenas, this may force
+  // deep copies of the elements.
+  void swap(RepeatedFieldProxy other) const { field().Swap(&other.field()); }
+
+  // Resizes the repeated field to `new_size` elements. If `new_size` is smaller
+  // than the current size, the field is truncated. Otherwise, the field is
+  // extended with default-valued elements.
+  void resize(size_t new_size) const { field().resize(new_size); }
+
+  // Because we have an overload of `resize` in this class, we need to
+  // explicitly inherit the overload from the base class to avoid hiding it.
+
+  // Resizes the repeated field to `new_size` elements. If `new_size` is smaller
+  // than the current size, the field is truncated. Otherwise, the field is
+  // extended with copies of `value`.
+  using internal::RepeatedFieldProxyWithResize<ElementType>::resize;
+
  private:
   friend RepeatedFieldProxy<const ElementType>;
 
   friend internal::RepeatedFieldProxyWithSet<ElementType, void>;
   friend internal::RepeatedFieldProxyWithPushBack<ElementType, void>;
   friend internal::RepeatedFieldProxyWithEmplaceBack<ElementType, void>;
+  friend internal::RepeatedFieldProxyWithResize<ElementType, void>;
 
   template <typename T, typename... Args>
   friend RepeatedFieldProxy<T> internal::ConstructRepeatedFieldProxy(
       Args&&... args);
+
+  template <int&... DeductionBarrier, typename T, typename Pred>
+  friend size_t erase_if(RepeatedFieldProxy<T> cont, Pred pred);
+  template <int&... DeductionBarrier, typename T, typename U>
+  friend size_t erase(RepeatedFieldProxy<T> cont, const U& value);
+  template <int&... DeductionBarrier, typename T, typename Compare>
+  friend void c_sort(RepeatedFieldProxy<T> cont, Compare cmp);
+  template <int&... DeductionBarrier, typename T>
+  friend void c_sort(RepeatedFieldProxy<T> cont);
+  template <int&... DeductionBarrier, typename T, typename Compare>
+  friend void c_stable_sort(RepeatedFieldProxy<T> cont, Compare cmp);
+  template <int&... DeductionBarrier, typename T>
+  friend void c_stable_sort(RepeatedFieldProxy<T> cont);
 
   RepeatedFieldProxy(RepeatedFieldType& field, Arena* arena)
       : Base(field), arena_(arena) {
@@ -464,7 +648,7 @@ class PROTOBUF_DECLSPEC_EMPTY_BASES RepeatedFieldProxy final
 
   Arena* arena() const { return arena_; }
 
-  Arena* arena_;
+  Arena* const arena_;
 };
 
 template <typename ElementType>
@@ -506,6 +690,8 @@ class RepeatedFieldProxy<const ElementType> final
   }
 
  private:
+  friend RepeatedFieldProxy<ElementType>;
+
   template <typename T, typename... Args>
   friend RepeatedFieldProxy<T> internal::ConstructRepeatedFieldProxy(
       Args&&... args);
@@ -536,6 +722,40 @@ RepeatedFieldProxy<ElementType> ToProxyType(const C<ElementType>* proxy) {
 }
 
 }  // namespace internal
+
+// Like C++20's std::erase_if, for RepeatedFieldProxy
+template <int&... DeductionBarrier, typename T, typename Pred>
+size_t erase_if(RepeatedFieldProxy<T> cont, Pred pred) {
+  return google::protobuf::erase_if(cont.field(), pred);
+}
+
+// Like C++20's std::erase, for RepeatedFieldProxy
+template <int&... DeductionBarrier, typename T, typename U>
+size_t erase(RepeatedFieldProxy<T> cont, const U& value) {
+  return google::protobuf::erase(cont.field(), value);
+}
+
+// Like C++20's std::sort, for RepeatedFieldProxy.
+template <int&... DeductionBarrier, typename T, typename Compare>
+void c_sort(RepeatedFieldProxy<T> cont, Compare cmp) {
+  google::protobuf::c_sort(cont.field(), cmp);
+}
+// Like C++20's std::sort, for RepeatedFieldProxy, with default comparison.
+template <int&... DeductionBarrier, typename T>
+void c_sort(RepeatedFieldProxy<T> cont) {
+  google::protobuf::c_sort(cont.field());
+}
+// Like C++20's std::stable_sort, for RepeatedFieldProxy.
+template <int&... DeductionBarrier, typename T, typename Compare>
+void c_stable_sort(RepeatedFieldProxy<T> cont, Compare cmp) {
+  google::protobuf::c_stable_sort(cont.field(), cmp);
+}
+// Like C++20's std::stable_sort, for RepeatedFieldProxy, with default
+// comparison.
+template <int&... DeductionBarrier, typename T>
+void c_stable_sort(RepeatedFieldProxy<T> cont) {
+  google::protobuf::c_stable_sort(cont.field());
+}
 
 }  // namespace protobuf
 }  // namespace google
