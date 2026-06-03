@@ -142,7 +142,41 @@ final class FieldSet<T extends FieldSet.FieldDescriptorLite<T>> {
     }
 
     FieldSet<?> other = (FieldSet<?>) o;
-    return fields.equals(other.fields);
+    return equals(this.fields, other.fields);
+  }
+
+  private static boolean equals(SmallSortedMap<?, ?> m1, SmallSortedMap<?, ?> m2) {
+    if (m1.size() != m2.size()) {
+      return false;
+    }
+    if (!m1.keySet().equals(m2.keySet())) {
+      return false;
+    }
+    for (Map.Entry<?, ?> entry : m1.entrySet()) {
+      Object key = entry.getKey();
+      Object v1 = entry.getValue();
+      Object v2 = m2.get(key);
+      if (!equalsValues(v1, v2)) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  private static boolean equalsValues(Object v1, Object v2) {
+    if (v1 == v2) {
+      return true;
+    }
+    if (v1 == null || v2 == null) {
+      return false;
+    }
+    if (v1 instanceof InternalLazyField) {
+      return v1.equals(v2);
+    }
+    if (v2 instanceof InternalLazyField) {
+      return v2.equals(v1);
+    }
+    return v1.equals(v2);
   }
 
   @Override
@@ -1141,6 +1175,19 @@ final class FieldSet<T extends FieldSet.FieldDescriptorLite<T>> {
       return o;
     }
 
+    /**
+     * Returns the InternalLazyField (not its contained value) if the field is a lazy field,
+     * otherwise returns null.
+     */
+    @SuppressWarnings({"ReturnMissingNullable", "PatternMatchingInstanceof"})
+    InternalLazyField getLazyField(final T descriptor) {
+      Object o = fields.get(descriptor);
+      if (o instanceof InternalLazyField) {
+        return (InternalLazyField) o;
+      }
+      return null;
+    }
+
     private void ensureIsMutable() {
       if (!isMutable) {
         fields = cloneAllFieldsMap(fields, /* copyList= */ true, /* resolveLazyFields= */ false);
@@ -1355,10 +1402,10 @@ final class FieldSet<T extends FieldSet.FieldDescriptorLite<T>> {
     private void mergeFromField(final Map.Entry<T, Object> entry) {
       final T descriptor = entry.getKey();
       Object otherValue = entry.getValue();
-      boolean isLazyField = otherValue instanceof InternalLazyField;
+      boolean otherIsLazyField = otherValue instanceof InternalLazyField;
 
       if (descriptor.isRepeated()) {
-        if (isLazyField) {
+        if (otherIsLazyField) {
           throw new IllegalStateException("Lazy fields can not be repeated");
         }
         List<Object> value = (List<Object>) getFieldAllowBuilders(descriptor);
@@ -1373,17 +1420,29 @@ final class FieldSet<T extends FieldSet.FieldDescriptorLite<T>> {
           value.add(FieldSet.cloneIfMutable(element));
         }
       } else if (descriptor.getLiteJavaType() == WireFormat.JavaType.MESSAGE) {
-        Object value = getFieldAllowBuilders(descriptor);
+        Object value = getLazyField(descriptor);
+        if (value == null) {
+          value = getFieldAllowBuilders(descriptor);
+        }
         if (value == null) {
           // New field.
           fields.put(descriptor, FieldSet.cloneIfMutable(otherValue));
-          if (isLazyField) {
+          if (otherIsLazyField) {
             hasLazyField = true;
           }
         } else {
           // There is an existing field. Need to merge the messages.
+          if (value instanceof InternalLazyField && otherValue instanceof InternalLazyField) {
+            fields.put(
+                descriptor,
+                InternalLazyField.mergeFrom(
+                    (InternalLazyField) value, (InternalLazyField) otherValue));
+            return;
+          }
+          if (value instanceof InternalLazyField) {
+            value = ((InternalLazyField) value).getValue();
+          }
           if (otherValue instanceof InternalLazyField) {
-            // Extract the actual value for lazy fields.
             otherValue = ((InternalLazyField) otherValue).getValue();
           }
           if (descriptor.internalMessageIsImmutable(value)) {
@@ -1396,7 +1455,7 @@ final class FieldSet<T extends FieldSet.FieldDescriptorLite<T>> {
           }
         }
       } else {
-        if (isLazyField) {
+        if (otherIsLazyField) {
           throw new IllegalStateException("Lazy fields must be message-valued");
         }
         fields.put(descriptor, cloneIfMutable(otherValue));
