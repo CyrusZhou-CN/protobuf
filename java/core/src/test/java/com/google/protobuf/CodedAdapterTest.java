@@ -11,6 +11,7 @@ import static com.google.common.truth.Truth.assertThat;
 
 import com.google.protobuf.testing.Proto2Testing.Proto2Message;
 import com.google.protobuf.testing.Proto3Testing.Proto3Message;
+import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import org.junit.Test;
 import org.junit.runner.RunWith;
@@ -24,7 +25,7 @@ public final class CodedAdapterTest {
     Proto3Message expected = new Proto3MessageFactory(5, 10, 2, 2).newMessage();
     byte[] expectedBytes = expected.toByteArray();
 
-    // Deserialize with BinaryReader and verify that the message matches the original.
+    // Deserialize with CodedInputStreamReader and verify that the message matches the original.
     Proto3Message result = fromByteArray(expectedBytes, Proto3Message.class);
     assertThat(result).isEqualTo(expected);
 
@@ -41,7 +42,7 @@ public final class CodedAdapterTest {
     Proto2Message expected = new Proto2MessageFactory(5, 10, 2, 2).newMessage();
     byte[] expectedBytes = expected.toByteArray();
 
-    // Deserialize with BinaryReader and verify that the message matches the original.
+    // Deserialize with CodedInputStreamReader and verify that the message matches the original.
     Proto2Message result = fromByteArray(expectedBytes, Proto2Message.class);
     assertThat(result).isEqualTo(expected);
 
@@ -53,7 +54,42 @@ public final class CodedAdapterTest {
     assertThat(actual).isEqualTo(expected);
   }
 
-  public static <T> byte[] toByteArray(T msg, int size) throws Exception {
+  @Test
+  public void emptyPackedFixedFieldFollowedByOtherFields() throws Exception {
+    ByteArrayOutputStream baos = new ByteArrayOutputStream();
+    CodedOutputStream output = CodedOutputStream.newInstance(baos);
+    // Zero-length packed fixed32 field (tag 41, length-delimited, length 0)
+    output.writeTag(41, WireFormat.WIRETYPE_LENGTH_DELIMITED);
+    output.writeUInt32NoTag(0);
+    // Followed by two ordinary fields
+    output.writeInt32(5, 42);
+    output.writeString(9, "hello");
+    output.flush();
+
+    Proto3Message message = fromByteArray(baos.toByteArray(), Proto3Message.class);
+
+    assertThat(message.getFieldFixed32ListPacked41List()).isEmpty();
+    assertThat(message.getFieldInt325()).isEqualTo(42);
+    assertThat(message.getFieldString9()).isEqualTo("hello");
+  }
+
+  @Test
+  public void emptyPackedVarintField() throws Exception {
+    ByteArrayOutputStream baos = new ByteArrayOutputStream();
+    CodedOutputStream output = CodedOutputStream.newInstance(baos);
+    // Zero-length packed int32 field (tag 39, length-delimited, length 0)
+    output.writeTag(39, WireFormat.WIRETYPE_LENGTH_DELIMITED);
+    output.writeUInt32NoTag(0);
+    output.writeInt32(5, 42);
+    output.flush();
+
+    Proto3Message message = fromByteArray(baos.toByteArray(), Proto3Message.class);
+
+    assertThat(message.getFieldInt32ListPacked39List()).isEmpty();
+    assertThat(message.getFieldInt325()).isEqualTo(42);
+  }
+
+  public static <T extends GeneratedMessageLite<?, ?>> byte[] toByteArray(T msg, int size) throws Exception {
     Schema<T> schema = Protobuf.getInstance().schemaFor(msg);
     byte[] out = new byte[size];
     CodedOutputStreamWriter writer =
@@ -63,7 +99,7 @@ public final class CodedAdapterTest {
     return out;
   }
 
-  public static <T> T fromByteArray(byte[] data, Class<T> messageType) {
+  public static <T extends GeneratedMessageLite<?, ?>> T fromByteArray(byte[] data, Class<T> messageType) {
     Schema<T> schema = Protobuf.getInstance().schemaFor(messageType);
     try {
       T msg = schema.newInstance();

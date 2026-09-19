@@ -38,6 +38,41 @@ class Location extends \Google\Protobuf\Internal\Message
      *   [ 4, 3, 2, 7 ]
      * this path refers to the whole field declaration (from the beginning
      * of the label to the terminating semicolon).
+     * For options, the path refers to the interpreted option in the descriptor.
+     * E.g., for a custom option `(my_opt) = "foo"` on a message using extension
+     * number 10101, the path is:
+     *   [ 4, 3, 7, 10101 ]
+     * refers to:
+     *   file.message_type(3)     // 4, 3
+     *       .options()           // 7
+     *       .my_opt()            // 10101
+     * Option parts, e.g. name and value are also appended using field numbers
+     * from `UninterpretedOption`, which deviates from the actual
+     * FileDescriptorProto path and uses negative values.
+     * E.g., for `(my_opt) = "foo"` the name `(my_opt)` is:
+     *   [ 4, 3, 7, 10101, -2 ]
+     * where -2 is negative of `UninterpretedOption.name`.
+     * The value "foo" is:
+     *   [ 4, 3, 7, 10101, -7 ]
+     * where -7 is the negative of `UninterpretedOption.string_value`.
+     * For complex options (e.g., "(my_opt) = {a: 100}"), the path
+     * will include -UninterpretedOption.aggregate_value (field number -8) as a
+     * marker for each level of nesting.
+     * For example, given:
+     *   option (my_opt) = {a: 100};
+     * The path for the `a` identifier would look like:
+     *   [ 4, 3, 7, 10101, -8, 1, -2 ]
+     * And for the value 100:
+     *   [ 4, 3, 7, 10101, -8, 1, -4 ]
+     * Where:
+     *   -8: UninterpretedOption.aggregate_value marker
+     *    1: The field number of "a" inside "my_opt"
+     *   -2: UninterpretedOption.name
+     *   -4: UninterpretedOption.positive_int_value
+     * We use negative values for UninterpretedOption due to keep it backward
+     * compatible with pre-existing undocumented behavior where options using
+     * dot-notation (e.g. `(my_opt).a = 100`) also produce a path like
+     * [ 4, 3, 7, 10101, 1] that spans the entire option.
      *
      * Generated from protobuf field <code>repeated int32 path = 1 [packed = true];</code>
      */
@@ -130,6 +165,41 @@ class Location extends \Google\Protobuf\Internal\Message
      *             [ 4, 3, 2, 7 ]
      *           this path refers to the whole field declaration (from the beginning
      *           of the label to the terminating semicolon).
+     *           For options, the path refers to the interpreted option in the descriptor.
+     *           E.g., for a custom option `(my_opt) = "foo"` on a message using extension
+     *           number 10101, the path is:
+     *             [ 4, 3, 7, 10101 ]
+     *           refers to:
+     *             file.message_type(3)     // 4, 3
+     *                 .options()           // 7
+     *                 .my_opt()            // 10101
+     *           Option parts, e.g. name and value are also appended using field numbers
+     *           from `UninterpretedOption`, which deviates from the actual
+     *           FileDescriptorProto path and uses negative values.
+     *           E.g., for `(my_opt) = "foo"` the name `(my_opt)` is:
+     *             [ 4, 3, 7, 10101, -2 ]
+     *           where -2 is negative of `UninterpretedOption.name`.
+     *           The value "foo" is:
+     *             [ 4, 3, 7, 10101, -7 ]
+     *           where -7 is the negative of `UninterpretedOption.string_value`.
+     *           For complex options (e.g., "(my_opt) = {a: 100}"), the path
+     *           will include -UninterpretedOption.aggregate_value (field number -8) as a
+     *           marker for each level of nesting.
+     *           For example, given:
+     *             option (my_opt) = {a: 100};
+     *           The path for the `a` identifier would look like:
+     *             [ 4, 3, 7, 10101, -8, 1, -2 ]
+     *           And for the value 100:
+     *             [ 4, 3, 7, 10101, -8, 1, -4 ]
+     *           Where:
+     *             -8: UninterpretedOption.aggregate_value marker
+     *              1: The field number of "a" inside "my_opt"
+     *             -2: UninterpretedOption.name
+     *             -4: UninterpretedOption.positive_int_value
+     *           We use negative values for UninterpretedOption due to keep it backward
+     *           compatible with pre-existing undocumented behavior where options using
+     *           dot-notation (e.g. `(my_opt).a = 100`) also produce a path like
+     *           [ 4, 3, 7, 10101, 1] that spans the entire option.
      *     @type int[] $span
      *           Always has exactly three or four elements: start line, start column,
      *           end line (optional, otherwise assumed same as start line), end column.
@@ -177,7 +247,8 @@ class Location extends \Google\Protobuf\Internal\Message
      *     @type string[] $leading_detached_comments
      * }
      */
-    public function __construct($data = NULL) {
+    public function __construct($data = null)
+    {
         \GPBMetadata\Google\Protobuf\Internal\Descriptor::initOnce();
         parent::__construct($data);
     }
@@ -204,6 +275,41 @@ class Location extends \Google\Protobuf\Internal\Message
      *   [ 4, 3, 2, 7 ]
      * this path refers to the whole field declaration (from the beginning
      * of the label to the terminating semicolon).
+     * For options, the path refers to the interpreted option in the descriptor.
+     * E.g., for a custom option `(my_opt) = "foo"` on a message using extension
+     * number 10101, the path is:
+     *   [ 4, 3, 7, 10101 ]
+     * refers to:
+     *   file.message_type(3)     // 4, 3
+     *       .options()           // 7
+     *       .my_opt()            // 10101
+     * Option parts, e.g. name and value are also appended using field numbers
+     * from `UninterpretedOption`, which deviates from the actual
+     * FileDescriptorProto path and uses negative values.
+     * E.g., for `(my_opt) = "foo"` the name `(my_opt)` is:
+     *   [ 4, 3, 7, 10101, -2 ]
+     * where -2 is negative of `UninterpretedOption.name`.
+     * The value "foo" is:
+     *   [ 4, 3, 7, 10101, -7 ]
+     * where -7 is the negative of `UninterpretedOption.string_value`.
+     * For complex options (e.g., "(my_opt) = {a: 100}"), the path
+     * will include -UninterpretedOption.aggregate_value (field number -8) as a
+     * marker for each level of nesting.
+     * For example, given:
+     *   option (my_opt) = {a: 100};
+     * The path for the `a` identifier would look like:
+     *   [ 4, 3, 7, 10101, -8, 1, -2 ]
+     * And for the value 100:
+     *   [ 4, 3, 7, 10101, -8, 1, -4 ]
+     * Where:
+     *   -8: UninterpretedOption.aggregate_value marker
+     *    1: The field number of "a" inside "my_opt"
+     *   -2: UninterpretedOption.name
+     *   -4: UninterpretedOption.positive_int_value
+     * We use negative values for UninterpretedOption due to keep it backward
+     * compatible with pre-existing undocumented behavior where options using
+     * dot-notation (e.g. `(my_opt).a = 100`) also produce a path like
+     * [ 4, 3, 7, 10101, 1] that spans the entire option.
      *
      * Generated from protobuf field <code>repeated int32 path = 1 [packed = true];</code>
      * @return RepeatedField<int>
@@ -235,6 +341,41 @@ class Location extends \Google\Protobuf\Internal\Message
      *   [ 4, 3, 2, 7 ]
      * this path refers to the whole field declaration (from the beginning
      * of the label to the terminating semicolon).
+     * For options, the path refers to the interpreted option in the descriptor.
+     * E.g., for a custom option `(my_opt) = "foo"` on a message using extension
+     * number 10101, the path is:
+     *   [ 4, 3, 7, 10101 ]
+     * refers to:
+     *   file.message_type(3)     // 4, 3
+     *       .options()           // 7
+     *       .my_opt()            // 10101
+     * Option parts, e.g. name and value are also appended using field numbers
+     * from `UninterpretedOption`, which deviates from the actual
+     * FileDescriptorProto path and uses negative values.
+     * E.g., for `(my_opt) = "foo"` the name `(my_opt)` is:
+     *   [ 4, 3, 7, 10101, -2 ]
+     * where -2 is negative of `UninterpretedOption.name`.
+     * The value "foo" is:
+     *   [ 4, 3, 7, 10101, -7 ]
+     * where -7 is the negative of `UninterpretedOption.string_value`.
+     * For complex options (e.g., "(my_opt) = {a: 100}"), the path
+     * will include -UninterpretedOption.aggregate_value (field number -8) as a
+     * marker for each level of nesting.
+     * For example, given:
+     *   option (my_opt) = {a: 100};
+     * The path for the `a` identifier would look like:
+     *   [ 4, 3, 7, 10101, -8, 1, -2 ]
+     * And for the value 100:
+     *   [ 4, 3, 7, 10101, -8, 1, -4 ]
+     * Where:
+     *   -8: UninterpretedOption.aggregate_value marker
+     *    1: The field number of "a" inside "my_opt"
+     *   -2: UninterpretedOption.name
+     *   -4: UninterpretedOption.positive_int_value
+     * We use negative values for UninterpretedOption due to keep it backward
+     * compatible with pre-existing undocumented behavior where options using
+     * dot-notation (e.g. `(my_opt).a = 100`) also produce a path like
+     * [ 4, 3, 7, 10101, 1] that spans the entire option.
      *
      * Generated from protobuf field <code>repeated int32 path = 1 [packed = true];</code>
      * @param int[] $var

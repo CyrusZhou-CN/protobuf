@@ -29,6 +29,9 @@ struct CMessageClass;
 // This struct is used directly for ScalarMap, and is the base class of
 // MessageMapContainer, which is used for MessageMap.
 struct MapContainer : public ContainerBase {
+  // Use to get a message for read-only operations.
+  const Message* GetReadOnlyMessage();
+
   // Use to get a mutable message when necessary.
   Message* GetMutableMessage();
 
@@ -58,6 +61,16 @@ extern MapContainer* NewScalarMapContainer(
 extern MessageMapContainer* NewMessageMapContainer(
     CMessage* parent, const FieldDescriptor* parent_field_descriptor,
     CMessageClass* message_class);
+
+// Promote a const child message mapped_type to mutable.
+// The parent message is already mutable.
+Message* PromoteConstMapValueMessage(Message* parent_message,
+                                     const FieldDescriptor* field,
+                                     const Message* message);
+
+// Make the Map representation of the field as dirty, to invalidate the repeated
+// field representation.
+void MakeMapFieldDirty(Message* message, const FieldDescriptor* field);
 
 }  // namespace python
 }  // namespace protobuf

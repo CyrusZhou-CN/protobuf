@@ -6,12 +6,23 @@
 // https://developers.google.com/open-source/licenses/bsd
 
 #include "python/convert.h"
+
+#include <assert.h>
+#include <stddef.h>
+#include <stdint.h>
+#include <string.h>
+
+#include "python/descriptor.h"
+#include "python/descriptor_pool.h"
 #include "python/message.h"
 #include "python/protobuf.h"
+#include "upb/base/descriptor_constants.h"
+#include "upb/mem/arena.h"
+#include "upb/message/array.h"
 #include "upb/message/compare.h"
-#include "upb/message/map.h"
+#include "upb/message/message.h"
+#include "upb/mini_table/message.h"
 #include "upb/reflection/def.h"
-#include "upb/reflection/message.h"
 #include "utf8_range.h"
 
 // Must be last.
@@ -51,7 +62,8 @@ PyObject* PyUpb_UpbToPy(upb_MessageValue val, const upb_FieldDef* f,
       return ret;
     }
     case kUpb_CType_Message:
-      return PyUpb_Message_Get((upb_Message*)val.msg_val,
+      return PyUpb_Message_Get(PyUpb_Arena_GetPool(arena),
+                               (upb_Message*)val.msg_val,
                                upb_FieldDef_MessageSubDef(f), arena);
     default:
       PyErr_Format(PyExc_SystemError,
@@ -135,18 +147,26 @@ static bool PyUpb_GetUint32(PyObject* obj, const upb_FieldDef* f,
 
 // If `arena` is specified, copies the string data into the given arena.
 // Otherwise aliases the given data.
-static upb_MessageValue PyUpb_MaybeCopyString(const char* ptr, size_t size,
-                                              upb_Arena* arena) {
+static bool PyUpb_MaybeCopyString(const char* ptr, size_t size,
+                                  upb_MessageValue* val, upb_Arena* arena) {
   upb_MessageValue ret;
   ret.str_val.size = size;
   if (arena) {
-    char* buf = upb_Arena_Malloc(arena, size);
-    memcpy(buf, ptr, size);
-    ret.str_val.data = buf;
+    if (size == 0) {
+      ret.str_val.data = "";
+    } else {
+      char* buf = upb_Arena_Malloc(arena, size);
+      if (!buf) {
+        PyErr_SetNone(PyExc_MemoryError);
+        return false;
+      }
+      ret.str_val.data = memcpy(buf, ptr, size);
+    }
   } else {
     ret.str_val.data = ptr;
   }
-  return ret;
+  *val = ret;
+  return true;
 }
 
 const char* upb_FieldDef_TypeString(const upb_FieldDef* f) {
@@ -215,6 +235,10 @@ static bool PyUpb_PyToUpbEnum(PyObject* obj, const upb_FieldDef* f,
 bool PyUpb_IsNumpyNdarray(PyObject* obj, const upb_FieldDef* f) {
   PyObject* type_name_obj =
       PyObject_GetAttrString((PyObject*)Py_TYPE(obj), "__name__");
+  if (!type_name_obj) {
+    PyErr_Clear();
+    return false;
+  }
   bool is_ndarray = false;
   if (!strcmp(PyUpb_GetStrData(type_name_obj), "ndarray")) {
     PyErr_Format(PyExc_TypeError,
@@ -229,6 +253,10 @@ bool PyUpb_IsNumpyNdarray(PyObject* obj, const upb_FieldDef* f) {
 bool PyUpb_IsNumpyBoolScalar(PyObject* obj) {
   PyObject* type_module_obj =
       PyObject_GetAttrString((PyObject*)Py_TYPE(obj), "__module__");
+  if (!type_module_obj) {
+    PyErr_Clear();
+    return false;
+  }
   bool is_numpy = !strcmp(PyUpb_GetStrData(type_module_obj), "numpy");
   Py_DECREF(type_module_obj);
   if (!is_numpy) {
@@ -237,6 +265,10 @@ bool PyUpb_IsNumpyBoolScalar(PyObject* obj) {
 
   PyObject* type_name_obj =
       PyObject_GetAttrString((PyObject*)Py_TYPE(obj), "__name__");
+  if (!type_name_obj) {
+    PyErr_Clear();
+    return false;
+  }
   bool is_bool = !strcmp(PyUpb_GetStrData(type_name_obj), "bool");
   Py_DECREF(type_name_obj);
   if (!is_bool) {
@@ -284,8 +316,7 @@ bool PyUpb_PyToUpb(PyObject* obj, const upb_FieldDef* f, upb_MessageValue* val,
       char* ptr;
       Py_ssize_t size;
       if (PyBytes_AsStringAndSize(obj, &ptr, &size) < 0) return false;
-      *val = PyUpb_MaybeCopyString(ptr, size, arena);
-      return true;
+      return PyUpb_MaybeCopyString(ptr, size, val, arena);
     }
     case kUpb_CType_String: {
       Py_ssize_t size;
@@ -301,15 +332,11 @@ bool PyUpb_PyToUpb(PyObject* obj, const upb_FieldDef* f, upb_MessageValue* val,
           assert(!obj);
           return false;
         }
-        *val = PyUpb_MaybeCopyString(ptr, size, arena);
-        return true;
-      } else {
-        const char* ptr;
-        ptr = PyUnicode_AsUTF8AndSize(obj, &size);
-        if (PyErr_Occurred()) return false;
-        *val = PyUpb_MaybeCopyString(ptr, size, arena);
-        return true;
+        return PyUpb_MaybeCopyString(ptr, size, val, arena);
       }
+      const char* ptr = PyUnicode_AsUTF8AndSize(obj, &size);
+      if (PyErr_Occurred()) return false;
+      return PyUpb_MaybeCopyString(ptr, size, val, arena);
     }
     case kUpb_CType_Message:
       PyErr_Format(PyExc_ValueError, "Message objects may not be assigned");

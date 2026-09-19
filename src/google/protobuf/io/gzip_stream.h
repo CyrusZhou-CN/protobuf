@@ -28,11 +28,10 @@
 
 namespace google {
 namespace protobuf {
+namespace io {
 namespace internal {
 struct StreamContext;
 }  // namespace internal
-
-namespace io {
 
 // A ZeroCopyInputStream that reads compressed data through zlib
 class PROTOBUF_FUTURE_ADD_EARLY_WARN_UNUSED PROTOBUF_EXPORT
@@ -59,7 +58,7 @@ class PROTOBUF_FUTURE_ADD_EARLY_WARN_UNUSED PROTOBUF_EXPORT
 
   // Return last error message or NULL if no error.
   PROTOBUF_FUTURE_ADD_EARLY_NODISCARD const char* ZlibErrorMessage() const;
-  PROTOBUF_FUTURE_ADD_EARLY_NODISCARD inline int ZlibErrorCode() const {
+  PROTOBUF_FUTURE_ADD_EARLY_NODISCARD int ZlibErrorCode() const {
     return zerror_;
   }
 
@@ -130,7 +129,7 @@ class PROTOBUF_FUTURE_ADD_EARLY_WARN_UNUSED PROTOBUF_EXPORT
 
   // Return last error message or NULL if no error.
   PROTOBUF_FUTURE_ADD_EARLY_NODISCARD const char* ZlibErrorMessage() const;
-  PROTOBUF_FUTURE_ADD_EARLY_NODISCARD inline int ZlibErrorCode() const {
+  PROTOBUF_FUTURE_ADD_EARLY_NODISCARD int ZlibErrorCode() const {
     return zerror_;
   }
 

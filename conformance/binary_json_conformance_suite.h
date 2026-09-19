@@ -147,6 +147,9 @@ class BinaryAndJsonConformanceSuiteImpl {
   void ExpectParseFailureForJson(const std::string& test_name,
                                  ConformanceLevel level,
                                  const std::string& input_json);
+  void RunValidJsonTestOrParseFailure(
+      const std::string& test_name, ConformanceLevel level,
+      const std::string& input_json, const std::string& equivalent_text_format);
   void ExpectSerializeFailureForJson(const std::string& test_name,
                                      ConformanceLevel level,
                                      const std::string& text_format);
@@ -173,6 +176,10 @@ class BinaryAndJsonConformanceSuiteImpl {
   void TestValidDataForRepeatedScalarMessage();
   void TestValidDataForMapType(google::protobuf::FieldDescriptor::Type,
                                google::protobuf::FieldDescriptor::Type);
+  void TestMapEntryWireTypeMismatch(google::protobuf::FieldDescriptor::Type,
+                                    google::protobuf::FieldDescriptor::Type);
+  void RunMapEntryWireTypeMismatchTest(const std::string& test_name,
+                                       const std::string& proto);
   void TestValidDataForOneofType(google::protobuf::FieldDescriptor::Type);
   void TestMergeOneofMessage();
   void TestOverwriteMessageValueMap();

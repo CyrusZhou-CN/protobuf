@@ -9,12 +9,15 @@
 
 __author__ = 'robinson@google.com (Will Robinson)'
 
+import gc
 import unittest
 import warnings
 
 from google.protobuf import descriptor
 from google.protobuf import descriptor_pb2
 from google.protobuf import descriptor_pool
+from google.protobuf import message
+from google.protobuf import message_factory
 from google.protobuf import symbol_database
 from google.protobuf import text_format
 from google.protobuf.internal import api_implementation
@@ -26,6 +29,7 @@ from absl.testing import parameterized
 from google.protobuf import unittest_custom_options_pb2
 from google.protobuf import unittest_features_pb2
 from google.protobuf import unittest_import_pb2
+from google.protobuf import unittest_import_public_pb2
 from google.protobuf import unittest_legacy_features_pb2
 from google.protobuf import unittest_pb2
 from google.protobuf import unittest_proto3_extensions_pb2
@@ -103,6 +107,28 @@ class DescriptorTest(unittest.TestCase):
 
   def GetDescriptorPool(self):
     return symbol_database.Default().pool
+
+  @unittest.skipIf(
+      api_implementation.Type() != 'upb',
+      'This test relies on the _obj_cache_count attribute, which is not '
+      'available in non-upb implementations.'
+  )
+  def testWeakMapCleanupOnObjectDestruction(self):
+    pool = descriptor_pool.DescriptorPool()
+    pool.AddSerializedFile(unittest_import_public_pb2.DESCRIPTOR.serialized_pb)
+    pool.AddSerializedFile(unittest_import_pb2.DESCRIPTOR.serialized_pb)
+    pool.AddSerializedFile(unittest_pb2.DESCRIPTOR.serialized_pb)
+    desc = pool.FindMessageTypeByName('proto2_unittest.TestAllTypes')
+    msg_cls = message_factory.GetMessageClass(desc)
+
+    self.assertIsNotNone(desc._concrete_class)
+    self.assertIs(desc._concrete_class, msg_cls)
+
+    del desc
+    del msg_cls
+    gc.collect()
+
+    self.assertEqual(0, pool._obj_cache_count)
 
   def testMissingPackage(self):
     file_proto = descriptor_pb2.FileDescriptorProto(
@@ -281,17 +307,19 @@ class DescriptorTest(unittest.TestCase):
     )
 
   @unittest.skipIf(
-      api_implementation.Type() == 'python', 'Not fixed yet in pure Python'
-  )
-  @unittest.skipIf(api_implementation.Type() == 'cpp', 'Not fixed yet in C++')
-  @unittest.skipIf(
       api_implementation.Type() == 'upb',
       'Needs to wait for a breaking change release in OSS'
   )
+  @unittest.skipIf(
+      api_implementation.Type() == 'cpp',
+      'Needs to wait for a breaking change release in OSS'
+  )
+  @unittest.skipIf(
+      api_implementation.Type() == 'python',
+      'Needs to wait for a breaking change release in OSS'
+  )
   def testModifyFrozenMessage(self):
-    # At least upb raises TypeError Other 2 implementations will likely be 
-    # fixed to be consistent with upb.
-    immutability_error = TypeError
+    immutability_error = message.FrozenInstanceError
     message_options = self.my_message.GetOptions()
     other_options = descriptor_pb2.MessageOptions()
     other_options.deprecated = True
@@ -335,24 +363,53 @@ class DescriptorTest(unittest.TestCase):
 
     # Unset submessage mutation
     complex_opt1 = unittest_custom_options_pb2.complex_opt1
-    stub_submsg = unittest_pb2.TestAllTypes.DESCRIPTOR.GetOptions().Extensions[complex_opt1]
+    stub_submsg = unittest_pb2.TestAllTypes.DESCRIPTOR.GetOptions().Extensions[
+        complex_opt1
+    ]
     with self.assertRaises(immutability_error):
       stub_submsg.foo = 5
 
     # Non-empty repeated field mutation
-    complex_options_msg = unittest_custom_options_pb2.VariousComplexOptions.DESCRIPTOR.GetOptions()
+    complex_options_msg = (
+        unittest_custom_options_pb2.VariousComplexOptions.DESCRIPTOR.GetOptions()
+    )
     non_empty_repeated = complex_options_msg.Extensions[complex_opt1].foo4
     self.assertEqual(len(non_empty_repeated), 2)
     with self.assertRaises(immutability_error):
       non_empty_repeated.clear()
     with self.assertRaises(immutability_error):
       non_empty_repeated.sort()
+    with self.assertRaises(immutability_error):
+      non_empty_repeated.remove(99)
+    with self.assertRaises(immutability_error):
+      non_empty_repeated.pop()
+    with self.assertRaises(immutability_error):
+      non_empty_repeated.reverse()
+
+    # Non-empty repeated composite field item access
+    complex_opt2 = unittest_custom_options_pb2.complex_opt2
+    non_empty_repeated_composite = complex_options_msg.Extensions[
+        complex_opt2
+    ].barney
+    self.assertEqual(len(non_empty_repeated_composite), 2)
+    first_barney = non_empty_repeated_composite[0]
+    self.assertEqual(first_barney.waldo, 101)
+    with self.assertRaises(immutability_error):
+      first_barney.waldo = 999
 
     # Extension dict mutation
     with self.assertRaises(immutability_error):
       message_options.Extensions[complex_opt1] = descriptor_pb2.MessageOptions()
+
+    message_opt1 = unittest_custom_options_pb2.message_opt1
+    with self.assertRaises(immutability_error):
+      message_options.Extensions[message_opt1] = -56
+
     with self.assertRaises(immutability_error):
       del message_options.Extensions[complex_opt1]
+
+    with self.assertRaises(immutability_error):
+      message_options.ClearExtension(complex_opt1)
 
     # Map field mutations
     map_field = stub_submsg.my_map
@@ -384,6 +441,80 @@ class DescriptorTest(unittest.TestCase):
 
     # Modification is (unfortunately) reflected in the descriptor.
     self.assertTrue(self.my_message.GetOptions().deprecated)
+
+  def testImmutableMapLookup(self):
+    complex_opt1 = unittest_custom_options_pb2.complex_opt1
+    complex_options_msg = (
+        unittest_custom_options_pb2.VariousComplexOptions.DESCRIPTOR.GetOptions()
+    )
+    immutable_map = complex_options_msg.Extensions[complex_opt1].my_map
+
+    # Test lookups.
+    self.assertEqual(immutable_map['key'], 123)
+    self.assertEqual(immutable_map['other_key'], 456)
+    self.assertIn('key', immutable_map)
+    self.assertIn('other_key', immutable_map)
+    self.assertNotIn('nonexistent_key', immutable_map)
+    self.assertEqual(len(immutable_map), 2)
+
+    # Test lookups via bytes.
+    self.assertEqual(immutable_map[b'key'], 123)
+    self.assertEqual(immutable_map[b'other_key'], 456)
+    self.assertIn(b'key', immutable_map)
+    self.assertIn(b'other_key', immutable_map)
+    self.assertNotIn(b'nonexistent_key', immutable_map)
+    self.assertEqual(len(immutable_map), 2)
+
+    # Test iteration.
+    self.assertEqual(set(immutable_map.keys()), {'key', 'other_key'})
+    self.assertEqual(set(immutable_map.values()), {123, 456})
+    self.assertEqual(
+        set(immutable_map.items()), {('key', 123), ('other_key', 456)}
+    )
+
+    # # Test get().
+    self.assertEqual(immutable_map.get('key'), 123)
+    self.assertEqual(immutable_map.get('nonexistent_key'), None)
+    self.assertEqual(immutable_map.get('nonexistent_key', 999), 999)
+
+  def testImmutableMessageMapLookup(self):
+    complex_opt1 = unittest_custom_options_pb2.complex_opt1
+    complex_options_msg = (
+        unittest_custom_options_pb2.VariousComplexOptions.DESCRIPTOR.GetOptions()
+    )
+    immutable_map = complex_options_msg.Extensions[complex_opt1].submsg_map
+
+    # Test lookups.
+    self.assertEqual(immutable_map['sub_key'].moo, 555)
+    self.assertIn('sub_key', immutable_map)
+    self.assertNotIn('nonexistent_key', immutable_map)
+    self.assertEqual(len(immutable_map), 1)
+
+    # Test lookups via bytes.
+    self.assertEqual(immutable_map[b'sub_key'].moo, 555)
+    self.assertIn(b'sub_key', immutable_map)
+    self.assertNotIn(b'nonexistent_key', immutable_map)
+
+    # Test iteration.
+    self.assertEqual(set(immutable_map.keys()), {'sub_key'})
+    self.assertEqual([item[1].moo for item in immutable_map.items()], [555])
+
+    # Test get().
+    self.assertEqual(immutable_map.get('sub_key').moo, 555)
+    self.assertIsNone(immutable_map.get('nonexistent_key'))
+    default_obj = object()
+    self.assertIs(
+        immutable_map.get('nonexistent_key', default_obj), default_obj
+    )
+
+    # Test get() with bytes.
+    self.assertEqual(immutable_map.get(b'sub_key').moo, 555)
+    self.assertIsNone(immutable_map.get(b'nonexistent_key'))
+
+    # Test text formatting on frozen message with message map.
+    text = text_format.MessageToString(complex_options_msg)
+    self.assertIn('sub_key', text)
+    self.assertIn('555', text)
 
   def testSimpleCustomOptions(self):
     file_descriptor = unittest_custom_options_pb2.DESCRIPTOR
@@ -1399,10 +1530,6 @@ class DescriptorCopyToProtoTest(unittest.TestCase):
         method_descriptor, descriptor_pb2.MethodDescriptorProto, expected_ascii
     )
 
-  @unittest.skipIf(
-      api_implementation.Type() == 'python', 'Pure python does not raise error.'
-  )
-  # TODO: Fix pure python to check with the proto type.
   def testCopyToProto_TypeError(self):
     file_proto = descriptor_pb2.FileDescriptorProto()
     self.assertRaises(
@@ -1415,6 +1542,11 @@ class DescriptorCopyToProtoTest(unittest.TestCase):
     )
     self.assertRaises(
         TypeError, unittest_pb2.TestService.DESCRIPTOR.CopyToProto, file_proto
+    )
+    self.assertRaises(
+        TypeError,
+        unittest_pb2.TestService.DESCRIPTOR.FindMethodByName('Foo').CopyToProto,
+        file_proto,
     )
     proto = descriptor_pb2.DescriptorProto()
     self.assertRaises(
@@ -1799,7 +1931,7 @@ class FeatureInheritanceTest(unittest.TestCase):
             )
         ],
         minimum_edition=descriptor_pb2.Edition.EDITION_PROTO2,
-        maximum_edition=descriptor_pb2.Edition.EDITION_2024,
+        maximum_edition=descriptor_pb2.Edition.EDITION_2026,
     )
     defaults.defaults[0].overridable_features.Extensions[
         unittest_features_pb2.test
@@ -1975,6 +2107,14 @@ class FeatureInheritanceTest(unittest.TestCase):
     SetTestFeature(self.method_proto, 5)
     pool = self.BuildPool()
     self.assertEqual(GetTestFeature(pool.method), 5)
+
+
+@testing_refleaks.TestCase
+class ExtensionRangesRefleakTest(unittest.TestCase):
+
+  def testExtensionRangesRefleak(self):
+    _ = unittest_pb2.TestAllExtensions.DESCRIPTOR.extension_ranges
+    _ = unittest_pb2.TestMultipleExtensionRanges.DESCRIPTOR.extension_ranges
 
 
 if __name__ == '__main__':

@@ -194,6 +194,7 @@ absl::Status ValidateExtension(const Descriptor& feature_set,
         extension->full_name());
   }
 
+  // Nested extensions on feature extension messages are forbidden.
   if (extension->message_type()->extension_count() > 0 ||
       extension->message_type()->extension_range_count() > 0) {
     return Error("Nested extensions in feature extension ",
@@ -450,7 +451,7 @@ absl::StatusOr<FeatureSetDefaults> FeatureResolver::CompileDefaults(
   FeatureSetDefaults defaults;
   defaults.set_minimum_edition(minimum_edition);
   defaults.set_maximum_edition(maximum_edition);
-  auto message_factory = absl::make_unique<DynamicMessageFactory>();
+  auto message_factory = std::make_unique<DynamicMessageFactory>();
   for (const auto& edition : editions) {
     auto fixed_defaults_dynamic =
         absl::WrapUnique(message_factory->GetPrototype(feature_set)->New());

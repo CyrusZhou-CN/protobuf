@@ -638,16 +638,6 @@ std::string QualifiedMsgGlobalsInstancePtr(const Descriptor* descriptor,
                       "ptr_");
 }
 
-std::string ClassDataType(const Descriptor* descriptor,
-                          const Options& options) {
-  return HasDescriptorMethods(descriptor->file(), options) ||
-                 // Bootstrap protos are always full, even when lite is forced
-                 // via options.
-                 IsBootstrapProto(options, descriptor->file())
-             ? "ClassDataFull"
-             : "ClassDataLite";
-}
-
 std::string DescriptorTableName(const FileDescriptor* file,
                                 const Options& options) {
   return UniqueName("descriptor_table", file, options);
@@ -946,7 +936,12 @@ std::string DefaultValue(const Options& options, const FieldDescriptor* field) {
       } else if (value != value) {
         return "::std::numeric_limits<double>::quiet_NaN()";
       } else {
-        return io::SimpleDtoa(value);
+        std::string double_value = io::SimpleDtoa(value);
+        // Make sure it is a double literal.
+        if (double_value.find_first_of(".eE") == std::string::npos) {
+          double_value.push_back('.');
+        }
+        return double_value;
       }
     }
     case FieldDescriptor::CPPTYPE_FLOAT: {
@@ -959,12 +954,11 @@ std::string DefaultValue(const Options& options, const FieldDescriptor* field) {
         return "::std::numeric_limits<float>::quiet_NaN()";
       } else {
         std::string float_value = io::SimpleFtoa(value);
-        // If floating point value contains a period (.) or an exponent
-        // (either E or e), then append suffix 'f' to make it a float
-        // literal.
-        if (float_value.find_first_of(".eE") != std::string::npos) {
-          float_value.push_back('f');
+        // Make sure it is a float literal.
+        if (float_value.find_first_of(".eE") == std::string::npos) {
+          float_value.push_back('.');
         }
+        float_value.push_back('f');
         return float_value;
       }
     }
@@ -1711,19 +1705,19 @@ std::string StrongReferenceToType(const Descriptor* desc,
                          ProtobufNamespace(options), name, name);
 }
 
-std::string WeakDescriptorDataSection(absl::string_view prefix,
-                                      const Descriptor* descriptor,
-                                      int index_in_file_messages,
-                                      const Options& options) {
-  const auto* file = descriptor->file();
-
+std::string WeakDefaultInstanceSection(const Descriptor* descriptor,
+                                       int index_in_file_messages,
+                                       const Options& options) {
+  absl::string_view prefix = !IsProfileDriven(options)               ? "def"
+                             : IsPresentMessage(descriptor, options) ? "gh"
+                                                                     : "gl";
   // To make a compact name we use the index of the object in its file
   // of its name.
   // So the name could be `pb_def_3_HASH` instead of
   // `pd_def_VeryLongClassName_WithNesting_AndMoreNames_HASH`
   // We need a know common prefix to merge the sections later on.
   return UniqueName(absl::StrCat("pb_", prefix, "_", index_in_file_messages),
-                    file, options);
+                    descriptor->file(), options);
 }
 
 bool UsingImplicitWeakFields(const FileDescriptor* file,
@@ -1838,24 +1832,16 @@ void ListAllFields(const FileDescriptor* d,
 }
 
 bool IsLayoutOptimized(const FieldDescriptor* field, const Options& options) {
-  return field->real_containing_oneof() == nullptr && !IsWeak(field, options);
+  return field->real_containing_oneof() == nullptr;
 }
 
-int CollectFieldsExcludingWeakAndOneof(
-    const Descriptor* d, const Options& options,
-    std::vector<const FieldDescriptor*>& fields) {
-  int num_weak_fields = 0;
+void CollectFieldsExcludingOneof(const Descriptor* d, const Options& options,
+                                 std::vector<const FieldDescriptor*>& fields) {
   for (auto field : internal::FieldRange(d)) {
-    if (IsWeak(field, options)) {
-      ++num_weak_fields;
-    }
-
     if (IsLayoutOptimized(field, options)) {
       fields.push_back(field);
     }
   }
-
-  return num_weak_fields;
 }
 
 void ListAllTypesForServices(const FileDescriptor* fd,

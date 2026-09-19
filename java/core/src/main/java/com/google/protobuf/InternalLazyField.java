@@ -133,12 +133,8 @@ class InternalLazyField {
    * @throws InvalidProtobufRuntimeException if either lazy field is corrupted and cannot be merged
    *     with a different extension registry.
    */
+  @SuppressWarnings("ReferenceEquality") // Compare singletons.
   static InternalLazyField mergeFrom(InternalLazyField self, InternalLazyField other) {
-    if (self.defaultInstance != other.defaultInstance) {
-      throw new IllegalArgumentException(
-          "LazyFields with different default instances cannot be merged.");
-    }
-
     // If either InternalLazyField is empty, return the other InternalLazyField.
     if (self.isEmpty()) {
       return other;
@@ -149,7 +145,10 @@ class InternalLazyField {
 
     // Fast path: concatenate the bytes if both LazyFields contain bytes and have the same extension
     // registry, even if one or both are corrupted.
-    if (self.hasBytes() && other.hasBytes() && self.extensionRegistry == other.extensionRegistry) {
+    if (self.hasBytes()
+        && other.hasBytes()
+        && self.extensionRegistry == other.extensionRegistry
+        && self.defaultInstance == other.defaultInstance) {
       return new InternalLazyField(
           self.defaultInstance, self.extensionRegistry, self.bytes.concat(other.bytes));
     }
@@ -211,14 +210,17 @@ class InternalLazyField {
       }
       try {
         // `bytes` is guaranteed to be non-null since `value` was null.
+        CodedInputStream input = bytes.newCodedInput();
+        input.enableAliasing(/* enabled= */ true);
         // When lazyExtensionEnabled() returns true, it means all extensions including MessageSet's
-        // will be fully parsed. When it returns false, it basically implies this is a message set
-        // extension, and we should fall back to the old behavior of silently returning the default
-        // instance on corrupted extensions i.e. full parse.
+        // will be fully parsed. When it returns false, it basically implies this can only be a
+        // MessageSet extension, and we should fall back to the old behavior of silently returning
+        // the default instance on corrupted extensions i.e. a full parse.
         value =
-            ExtensionRegistryLite.lazyExtensionEnabled()
-                ? defaultInstance.getParserForType().parsePartialFrom(bytes, extensionRegistry)
-                : defaultInstance.getParserForType().parseFrom(bytes, extensionRegistry);
+            extensionRegistry.lazyExtensionEnabled()
+                ? defaultInstance.getParserForType().parsePartialFrom(input, extensionRegistry)
+                : defaultInstance.getParserForType().parseFrom(input, extensionRegistry);
+        input.checkLastTagWas(0);
       } catch (InvalidProtocolBufferException e) {
         corrupted = true;
         throw e;
@@ -238,7 +240,7 @@ class InternalLazyField {
       ensureInitialized();
       return value;
     } catch (InvalidProtocolBufferException e) {
-      if (ExtensionRegistryLite.lazyExtensionEnabled()) {
+      if (extensionRegistry.lazyExtensionEnabled()) {
         // New behavior: runtime exception on corrupted extensions.
         throw new InvalidProtobufRuntimeException(e);
       } else {
@@ -281,7 +283,7 @@ class InternalLazyField {
         + computeSize(WireFormat.MESSAGE_SET_MESSAGE);
   }
 
-  void writeTo(Writer writer, int fieldNumber) throws IOException {
+  void writeTo(CodedOutputStreamWriter writer, int fieldNumber) throws IOException {
     if (bytes != null) {
       writer.writeBytes(fieldNumber, bytes);
     } else {

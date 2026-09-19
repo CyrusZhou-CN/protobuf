@@ -14,6 +14,7 @@
 #include <cstring>
 #include <functional>
 #include <iterator>
+#include <limits>
 #include <list>
 #include <memory>
 #include <string>
@@ -23,6 +24,7 @@
 
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
+#include "absl/container/flat_hash_set.h"
 #include "absl/log/absl_check.h"
 #include "absl/numeric/bits.h"
 #include "absl/strings/str_cat.h"
@@ -35,6 +37,7 @@
 #include "google/protobuf/message.h"
 #include "google/protobuf/message_lite.h"
 #include "google/protobuf/port.h"
+#include "google/protobuf/serial_arena.h"
 #include "google/protobuf/test_protos/repeated_ptr_field_test.pb.h"
 #include "google/protobuf/test_textproto.h"
 #include "google/protobuf/unittest.pb.h"
@@ -55,6 +58,7 @@ using ::testing::AllOf;
 using ::testing::ElementsAre;
 using ::testing::ElementsAreArray;
 using ::testing::Ge;
+using ::testing::HasSubstr;
 using ::testing::Le;
 
 using String = std::string;
@@ -73,21 +77,40 @@ class RepeatedPtrFieldTest : public testing::Test {
   static int ClearedCount(RepeatedPtrField<T>& field) {
     return field.ClearedCount();
   }
+
+  // To test CheckedAdd overflow bounds checking without allocating massive
+  // amounts of memory (e.g. 16GB for 2B pointers in RepeatedPtrField), we
+  // allocate a small Rep container and then manually set its capacity and
+  // size to std::numeric_limits<int>::max() using these friend helpers.
+  template <typename T>
+  static void SetFakeCapacityAndSize(RepeatedPtrField<T>* field, int capacity,
+                                     int size) {
+    field->Reserve(10);
+    RepeatedPtrFieldBase* base = field;
+    base->rep()->capacity = capacity;
+    base->rep()->allocated_size = size;
+    base->current_size_ = size;
+  }
+
+  template <typename T>
+  static void SetFakeSizeOnly(RepeatedPtrField<T>* field, int size) {
+    RepeatedPtrFieldBase* base = field;
+    base->current_size_ = size;
+  }
 };
 
 TEST(RepeatedPtrOverPtrsIteratorTest, Traits) {
   using It = RepeatedPtrField<std::string>::pointer_iterator;
-  static_assert(std::is_same<It::value_type, std::string*>::value, "");
-  static_assert(std::is_same<It::reference, std::string*&>::value, "");
-  static_assert(std::is_same<It::pointer, std::string**>::value, "");
-  static_assert(std::is_same<It::difference_type, std::ptrdiff_t>::value, "");
-  static_assert(std::is_same<It::iterator_category,
-                             std::random_access_iterator_tag>::value,
-                "");
+  static_assert(std::is_same_v<It::value_type, std::string*>, "");
+  static_assert(std::is_same_v<It::reference, std::string*&>, "");
+  static_assert(std::is_same_v<It::pointer, std::string**>, "");
+  static_assert(std::is_same_v<It::difference_type, std::ptrdiff_t>, "");
+  static_assert(
+      std::is_same_v<It::iterator_category, std::random_access_iterator_tag>,
+      "");
 #if PROTOBUF_CPLUSPLUS_MIN(202002L)
   static_assert(
-      std::is_same<It::iterator_concept, std::contiguous_iterator_tag>::value,
-      "");
+      std::is_same_v<It::iterator_concept, std::contiguous_iterator_tag>, "");
 #else
   static_assert(std::is_same<It::iterator_concept,
                              std::random_access_iterator_tag>::value,
@@ -111,19 +134,16 @@ TEST(RepeatedPtrOverPtrsIteratorTest, ToAddress) {
 
 TEST(ConstRepeatedPtrOverPtrsIterator, Traits) {
   using It = RepeatedPtrField<std::string>::const_pointer_iterator;
-  static_assert(std::is_same<It::value_type, const std::string*>::value, "");
-  static_assert(std::is_same<It::reference, const std::string* const&>::value,
-                "");
-  static_assert(std::is_same<It::pointer, const std::string* const*>::value,
-                "");
-  static_assert(std::is_same<It::difference_type, std::ptrdiff_t>::value, "");
-  static_assert(std::is_same<It::iterator_category,
-                             std::random_access_iterator_tag>::value,
-                "");
+  static_assert(std::is_same_v<It::value_type, const std::string*>, "");
+  static_assert(std::is_same_v<It::reference, const std::string* const&>, "");
+  static_assert(std::is_same_v<It::pointer, const std::string* const*>, "");
+  static_assert(std::is_same_v<It::difference_type, std::ptrdiff_t>, "");
+  static_assert(
+      std::is_same_v<It::iterator_category, std::random_access_iterator_tag>,
+      "");
 #if PROTOBUF_CPLUSPLUS_MIN(202002L)
   static_assert(
-      std::is_same<It::iterator_concept, std::contiguous_iterator_tag>::value,
-      "");
+      std::is_same_v<It::iterator_concept, std::contiguous_iterator_tag>, "");
 #else
   static_assert(std::is_same<It::iterator_concept,
                              std::random_access_iterator_tag>::value,
@@ -308,6 +328,40 @@ TEST_F(RepeatedPtrFieldTest, Large) {
   EXPECT_GE(field.SpaceUsedExcludingSelf(), min_expected_usage);
 }
 
+TEST_F(RepeatedPtrFieldTest, DestroyErroneousIncorrectElement) {
+#if defined(NDEBUG) || !defined(PROTOBUF_CUSTOM_VTABLE)
+  GTEST_SKIP() << "The `DCHECK` is disabled in release builds / "
+                  "!PROTOBUF_CUSTOM_VTABLE.";
+#else
+  auto destroy_wrong_element_type = []() {
+    RepeatedPtrField<TestAllTypes> field;
+    field.AddAllocated(reinterpret_cast<TestAllTypes*>(
+        new proto2_unittest::NestedTestAllTypes));
+  };
+  // The destructor of `RepeatedPtrField` verifies that all elements are of the
+  // expected type.
+  ASSERT_DEATH(destroy_wrong_element_type(),
+               "Type mismatch in RepeatedPtrFieldBase::DestroyMessageLites");
+#endif
+}
+
+TEST_F(RepeatedPtrFieldTest, DestroyErroneousMixedElements) {
+#if defined(NDEBUG) || !defined(PROTOBUF_CUSTOM_VTABLE)
+  GTEST_SKIP() << "The `DCHECK` is disabled in release builds / "
+                  "!PROTOBUF_CUSTOM_VTABLE.";
+#else
+  auto destroy_heterogenous_repeated_field = []() {
+    RepeatedPtrField<google::protobuf::MessageLite> field;
+    field.AddAllocated(new TestAllTypes);
+    field.AddAllocated(new proto2_unittest::NestedTestAllTypes);
+  };
+  // The destructor of `RepeatedPtrField` verifies that all elements are of the
+  // same type if the element type is `Message` or `MessageLite`.
+  ASSERT_DEATH(destroy_heterogenous_repeated_field(),
+               "Type mismatch in RepeatedPtrFieldBase::DestroyMessageLites");
+#endif
+}
+
 namespace {
 
 template <typename Elem>
@@ -353,7 +407,76 @@ TEST_F(RepeatedPtrFieldTest, ArenaAllocationSizesMatchExpectedValues) {
   EXPECT_NO_FATAL_FAILURE(CheckAllocationSizes<TestAllTypes::NestedMessage>());
 }
 
-TEST_F(RepeatedPtrFieldTest, NaturalGrowthOnArenasReuseBlocks) {
+TEST_F(RepeatedPtrFieldTest, NaturalGrowthOnArenasGrowsTheTail) {
+  using Elem = std::string;
+  using Field = RepeatedPtrField<Elem>;
+
+  Arena arena;
+  internal::SerialArena* serial_arena = GetSerialArena(&arena);
+  std::vector<Field*> fields;
+  static constexpr int kNumFields = 100;
+  static constexpr int kNumElems = 100;
+  absl::optional<int> common_capacity;
+  size_t total_pointers_seen = 0;
+
+  for (int i = 0; i < kNumFields; ++i) {
+    fields.push_back(Arena::Create<Field>(&arena));
+    absl::flat_hash_set<const void*> pointers_seen;
+    absl::flat_hash_set<size_t> capacities_seen;
+    auto& field = *fields.back();
+    for (int j = 0; j < kNumElems; ++j) {
+      field.Add("");
+      capacities_seen.insert(field.Capacity());
+      pointers_seen.insert(field.data());
+    }
+
+    // Free-lists and tail grow optimizations on the arena interfere with each
+    // other.
+    // In normal usage, free list usage is distributed in a way that does not
+    // permanently affect the tail grow optimization. Arrays are different sizes
+    // and many are small so they end up taking the small blocks from the free
+    // lists.
+    //
+    // But in this test, all our arrays are very large so if a single block ends
+    // up in the first slot of the free list, we will use it consistently on
+    // every following container and that will interfere with testing the tail
+    // growth optimization.
+    //
+    // To prevent this interference, we artifically allocate from the free lists
+    // here so that containers always have their first allocation in the tail of
+    // the arena. Take into account the blocks for 32-bit and 64-bit.
+    serial_arena->TryAllocateFromCachedBlock(16);
+    serial_arena->TryAllocateFromCachedBlock(32);
+
+    total_pointers_seen += pointers_seen.size();
+
+    // We should still see the capacities grow naturally. The in-place
+    // growth is an implementation detail.
+    ASSERT_THAT(capacities_seen.size(), AllOf(Ge(6), Le(8)));
+
+    if (!common_capacity.has_value()) {
+      common_capacity = field.Capacity();
+    } else {
+      ASSERT_EQ(field.Capacity(), *common_capacity);
+    }
+  }
+
+  // We should have seen close to 2 pointers per container on average: one for
+  // the soo and one for the arena block. Sometimes we get more because we can't
+  // grow in place in the remaining space in the block. Also, every now and then
+  // the StringBlock is exhausted and we allocate a new one from the Arena
+  // block, breaking the tail growth.
+  EXPECT_THAT(static_cast<double>(total_pointers_seen) / kNumFields,
+              AllOf(Ge(2.0), Le(2.5)));
+
+  const size_t expected = kNumFields * (*common_capacity) * sizeof(Elem*) +
+                          kNumFields * kNumElems * sizeof(Elem);
+  // Verify that we used the expected, plus some overhead.
+  EXPECT_THAT(arena.SpaceUsed(), AllOf(Ge(expected), Le(1.05 * expected)));
+}
+
+TEST_F(RepeatedPtrFieldTest,
+       NaturalGrowthOnArenasReuseBlocksIfItCantGrowTheTail) {
   using Elem = std::string;
   using Field = RepeatedPtrField<Elem>;
 
@@ -361,12 +484,18 @@ TEST_F(RepeatedPtrFieldTest, NaturalGrowthOnArenasReuseBlocks) {
   std::vector<Field*> fields;
   static constexpr int kNumFields = 100;
   static constexpr int kNumElems = 1000;
+  size_t dummy_alloc = 0;
   absl::optional<int> common_capacity;
   for (int i = 0; i < kNumFields; ++i) {
     fields.push_back(Arena::Create<Field>(&arena));
     auto& field = *fields.back();
     for (int j = 0; j < kNumElems; ++j) {
       field.Add("");
+
+      // We need to force dummy allocations to exist between Add calls so that
+      // we disable the fastpath that grows the array in place.
+      (void)Arena::Create<int64_t>(&arena);
+      dummy_alloc += 8;
     }
     if (!common_capacity.has_value()) {
       common_capacity = field.Capacity();
@@ -377,10 +506,11 @@ TEST_F(RepeatedPtrFieldTest, NaturalGrowthOnArenasReuseBlocks) {
 
   const size_t expected = kNumFields * (*common_capacity) * sizeof(Elem*) +
                           kNumFields * kNumElems * sizeof(Elem);
-  // Use a 2% slack for other overhead.
+  // Verify that we used the expected, plus some overhead.
   // If we were not reusing the blocks, the actual value would be ~2x the
   // expected.
-  EXPECT_THAT(arena.SpaceUsed(), AllOf(Ge(expected), Le(1.02 * expected)));
+  EXPECT_THAT(arena.SpaceUsed() - dummy_alloc,
+              AllOf(Ge(expected), Le(1.02 * expected)));
 }
 
 TEST_F(RepeatedPtrFieldTest, AddAndAssignRanges) {
@@ -2025,6 +2155,79 @@ TEST_F(RepeatedPtrFieldInsertionIteratorsTest, MoveProtos) {
   }
 }
 
+
+class RepeatedPtrFieldIsFullTest : public RepeatedPtrFieldTest {
+ protected:
+  void SetUp() override {
+    if (GetBoundsCheckMode() != BoundsCheckMode::kAbort) {
+      GTEST_SKIP() << "Preemtive abort is not enabled.";
+    }
+  }
+};
+
+TEST_F(RepeatedPtrFieldIsFullTest, InternalExtendAbortOnFull) {
+  EXPECT_DEATH(
+      {
+        RepeatedPtrField<std::string> field;
+        SetFakeCapacityAndSize(&field, std::numeric_limits<int>::max(),
+                               std::numeric_limits<int>::max());
+        field.Add();
+      },
+      HasSubstr("Integer overflow in CheckedAdd: 2147483647 + 1"));
+}
+
+TEST_F(RepeatedPtrFieldIsFullTest, MergeFromInternalAbortOnFull) {
+  EXPECT_DEATH(
+      {
+        RepeatedPtrField<std::string> f1;
+        RepeatedPtrField<std::string> f2;
+        f2.Add("abc");
+        SetFakeSizeOnly(&f1, std::numeric_limits<int>::max());
+        f1.MergeFrom(f2);
+      },
+      HasSubstr("Integer overflow in CheckedAdd: 2147483647 + 1"));
+}
+
+TEST_F(RepeatedPtrFieldIsFullTest, MergeFromConcreteAbortOnFull) {
+  EXPECT_DEATH(
+      {
+        RepeatedPtrField<LargeMsg> f1;
+        RepeatedPtrField<LargeMsg> f2;
+        LargeMsg msg;
+        f2.Add()->CopyFrom(msg);
+        SetFakeSizeOnly(&f1, std::numeric_limits<int>::max());
+        f1.MergeFrom(f2);
+      },
+      HasSubstr("Integer overflow in CheckedAdd: 2147483647 + 1"));
+}
+
+TEST_F(RepeatedPtrFieldIsFullTest, MergeFromLiteAbortOnFull) {
+  EXPECT_DEATH(
+      {
+        RepeatedPtrField<MessageLite> f1;
+        RepeatedPtrField<MessageLite> f2;
+        f2.AddAllocated(new LargeMsg());
+        SetFakeSizeOnly(&f1, std::numeric_limits<int>::max());
+        f1.MergeFrom(f2);
+      },
+      HasSubstr("Integer overflow in CheckedAdd: 2147483647 + 1"));
+}
+
+TEST_F(RepeatedPtrFieldIsFullTest, ExtractSubrangeNegativeStart) {
+  RepeatedPtrField<std::string> field;
+  std::string* catcher[1];
+  EXPECT_DEATH(
+      field.ExtractSubrange(-1, 0, catcher),
+      HasSubstr("Value (-1) must be greater than or equal to limit (0)"));
+}
+
+TEST_F(RepeatedPtrFieldIsFullTest, ExtractSubrangeNegativeNum) {
+  RepeatedPtrField<std::string> field;
+  std::string* catcher[1];
+  EXPECT_DEATH(
+      field.ExtractSubrange(0, -1, catcher),
+      HasSubstr("Value (-1) must be greater than or equal to limit (0)"));
+}
 
 }  // namespace internal
 }  // namespace protobuf

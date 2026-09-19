@@ -222,6 +222,8 @@ module Google
         return true if other.object_id == object_id
         if other.is_a? RepeatedField
           return false unless other.length == length
+          return true if length == 0
+          return false if type != other.send(:type) or descriptor != other.send(:descriptor)
           each_msg_val_with_index do |msg_val, i|
             other_msg_val = Google::Protobuf::FFI.get_msgval_at(other.send(:array), i)
             unless Google::Protobuf::FFI.message_value_equal(msg_val, other_msg_val, type, descriptor)
@@ -387,8 +389,8 @@ module Google
         instance
       end
 
-      def fuse_arena(arena)
-        arena.fuse(arena)
+      def fuse_arena(other_arena)
+        @arena.fuse(other_arena)
       end
 
       extend Google::Protobuf::Internal::Convert
