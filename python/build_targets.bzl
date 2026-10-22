@@ -59,6 +59,7 @@ def build_targets(name):
         srcs_version = "PY2AND3",
         visibility = [
             "//:__pkg__",
+            "//conformance:__subpackages__",
             "//editions:__pkg__",
             "//upb:__subpackages__",
         ],
@@ -120,6 +121,7 @@ def build_targets(name):
         srcs = native.glob([
             "google/protobuf/pyext/*.cc",
             "google/protobuf/pyext/*.h",
+            "google/protobuf/pyext/free_threading/*.h",
         ]),
         copts = COPTS + [
             "-DGOOGLE_PROTOBUF_HAS_ONEOF=1",
@@ -172,7 +174,9 @@ def build_targets(name):
         srcs = ["google/protobuf/pyext/testing/map_test_helper.cc"],
         deps = [
             ":proto_api",
+            "@abseil-cpp//absl/status:statusor",
             "//src/google/protobuf",
+            "//src/google/protobuf:port",
             "@rules_python//python/cc:current_py_cc_headers",
         ],
         linkshared = 1,
@@ -578,6 +582,7 @@ def build_targets(name):
             "google/protobuf/internal/*.cc",
             "google/protobuf/pyext/*.cc",
             "google/protobuf/pyext/*.h",
+            "google/protobuf/pyext/free_threading/*.h",
         ]) + [
             "BUILD.bazel",
             "MANIFEST.in",

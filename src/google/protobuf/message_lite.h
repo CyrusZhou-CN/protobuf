@@ -47,6 +47,7 @@
 #include "google/protobuf/message_traits.h"
 #include "google/protobuf/metadata_lite.h"
 #include "google/protobuf/port.h"
+#include "google/protobuf/raw_ptr.h"
 #include "google/protobuf/type_id.h"
 
 
@@ -365,7 +366,7 @@ class PROTOBUF_EXPORT MessageLite {
 
   // Construct a new instance of the same type.  Ownership is passed to the
   // caller.
-  [[nodiscard]] MessageLite* New() const { return New(nullptr); }
+  [[nodiscard]] MessageLite* New() const { return New(/*arena=*/nullptr); }
 
   // Construct a new instance on the arena. Ownership is passed to the caller
   // if arena is a nullptr.
@@ -751,6 +752,50 @@ class PROTOBUF_EXPORT MessageLite {
   // Message implementations require access to internally visible API.
   static constexpr internal::InternalVisibility internal_visibility() {
     return internal::InternalVisibility{};
+  }
+
+  // Split helpers
+  template <typename Msg, typename T, typename Split>
+  static PROTOBUF_ALWAYS_INLINE decltype(auto) GetSplitField(
+      const Msg& self, T Split::* address) {
+    const auto& split = *self._impl_._split_;
+    if constexpr (internal::kIsRawPtr<T>) {
+      return *(split.*address);
+    } else if constexpr (std::is_pointer_v<T>) {
+      using SubT = std::remove_pointer_t<T>;
+      return static_cast<const SubT*>(split.*address);
+    } else {
+      return std::as_const(split.*address);
+    }
+  }
+
+  template <typename Msg, typename T, typename Split>
+  static PROTOBUF_ALWAYS_INLINE auto* TryMutableSplitField(Msg& self,
+                                                           T Split::* address) {
+    auto* split = self._impl_._split_;
+    if constexpr (internal::kIsRawPtr<T>) {
+      auto& raw = split->*address;
+      return raw.IsDefault() ? nullptr : &*raw;
+    } else {
+      return self.IsSplitMessageDefault() ? nullptr : &(split->*address);
+    }
+  }
+
+  template <typename Msg, typename T, typename Split>
+  static PROTOBUF_ALWAYS_INLINE auto& MutableSplitField(Msg& self,
+                                                        T Split::* address) {
+    ABSL_DCHECK_NE(&self, &self.default_instance());
+    self.PrepareSplitMessageForWrite();
+    auto* split = self._impl_._split_;
+    if constexpr (internal::kIsRawPtr<T>) {
+      auto& raw = split->*address;
+      if (raw.IsDefault()) {
+        raw.Set(Arena::Create<typename T::value_type>(self.GetArena()));
+      }
+      return *raw;
+    } else {
+      return split->*address;
+    }
   }
 
   template <typename T>
@@ -1222,6 +1267,15 @@ PROTOBUF_FUTURE_ADD_EARLY_NODISCARD T* DynamicCastMessage(MessageLite* from) {
 }
 
 namespace internal {
+
+inline bool HasArena(const MessageLite& message) {
+  return message.GetArena() != nullptr;
+}
+
+inline Arena* GetArena(const MessageLite& message) {
+  return message.GetArena();
+}
+
 // Takes either a `const char*` string literal as the `To` type name, or a
 // pointer to a message prototype that we can call `GetTypeName()` on. This is
 // done to minimize code bloat in the caller, since dynamic casts are inlined.
